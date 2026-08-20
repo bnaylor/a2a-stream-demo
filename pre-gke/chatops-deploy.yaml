@@ -45,9 +45,10 @@ spec:
             # Worker pod image (docker registry).
             - name: WORKER_IMAGE
               value: "10.3.10.52:5000/a2a-demo/worker:latest"
-            # Worker model (haiku for cost-efficient task execution).
+            # Worker model (sonnet: haiku finished research tasks too fast to
+            # watch, and the extra depth is worth the cost here).
             - name: WORKER_MODEL
-              value: "claude-haiku-4-5"
+              value: "claude-sonnet-5"
             # Worker max budget (USD per task).
             - name: WORKER_MAX_BUDGET_USD
               value: "1.50"

@@ -33,7 +33,7 @@ spec:
         - name: CONTEXT_ID
           value: "context-REPLACE"
         - name: WORKER_MODEL
-          value: "claude-haiku-4-5"
+          value: "claude-sonnet-5"
         - name: WORKER_MAX_BUDGET_USD
           value: "1.50"
         - name: ANTHROPIC_API_KEY

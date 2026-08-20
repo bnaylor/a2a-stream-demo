@@ -113,6 +113,25 @@ function notice(session: string, state: string, artifact: string): string {
   );
 }
 
+/**
+ * The self-initiated turn that reports a finished delegation without waiting
+ * for the user to speak. Same fencing contract as `notice`: the state comes
+ * from the closed allowlist and renders outside the fence, the artifact is
+ * sentinel-stripped, capped and angle-escaped inside it.
+ */
+function summaryPrompt(
+  session: string,
+  state: string,
+  artifact: string
+): string {
+  return (
+    `Session ${session} just ${safeState(state)}. Its result: ` +
+    fence(`session="${session}"`, safeText(artifact)) +
+    `\n\nSummarize the outcome for the user in 2-4 sentences (or relay the ` +
+    `full result if it is short), prefixed with the session name in brackets.`
+  );
+}
+
 function isFinal(env: Envelope): boolean {
   return (
     env.kind === "status-update" &&
@@ -169,6 +188,38 @@ export async function startChatOps(deps: ChatOpsDeps): Promise<ChatOpsHandle> {
     delegations.delete(session);
   }
 
+  /**
+   * One chat turn: `working`, then the mapped model output, then whatever
+   * terminal status the stream produced. Shared by user-driven turns and by
+   * the self-initiated delegate summaries, so both look identical on the wire.
+   *
+   * Publishes a `failed` final on any error and then RETHROWS, so callers can
+   * fall back (the summary path re-queues a notice); `handleTurn` swallows it.
+   */
+  async function runTurn(ctx: TaskCtx, prompt: string): Promise<void> {
+    await deps.publishEvent(ctx.taskId, status(ctx, "working", false));
+    let sawFinal = false;
+    try {
+      for await (const m of deps.session.send(prompt)) {
+        for (const out of mapSdkMessage(m, ctx)) {
+          await deps.publishEvent(ctx.taskId, out);
+          if (isFinal(out)) sawFinal = true;
+        }
+      }
+    } catch (err) {
+      await deps.publishEvent(
+        ctx.taskId,
+        status(ctx, "failed", true, String(err))
+      );
+      throw err;
+    }
+    if (!sawFinal) {
+      const reason = "stream-ended-without-result";
+      await deps.publishEvent(ctx.taskId, status(ctx, "failed", true, reason));
+      throw new Error(reason);
+    }
+  }
+
   // 1. Chat turn: drain notices into the prompt, stream the answer onto the
   //    chat task's events subject.
   async function handleTurn(env: Envelope): Promise<void> {
@@ -188,24 +239,27 @@ export async function startChatOps(deps: ChatOpsDeps): Promise<ChatOpsHandle> {
       ? `${notices.join("\n")}\n\n${userPrompt}`
       : userPrompt;
 
-    await deps.publishEvent(taskId, status(ctx, "working", false));
     try {
-      let sawFinal = false;
-      for await (const m of deps.session.send(prompt)) {
-        for (const out of mapSdkMessage(m, ctx)) {
-          await deps.publishEvent(taskId, out);
-          if (isFinal(out)) sawFinal = true;
-        }
-      }
-      if (!sawFinal) {
-        await deps.publishEvent(
-          taskId,
-          status(ctx, "failed", true, "stream-ended-without-result")
-        );
-      }
-    } catch (err) {
-      await deps.publishEvent(taskId, status(ctx, "failed", true, String(err)));
+      await runTurn(ctx, prompt);
+    } catch {
+      /* runTurn already published the failed final for this task */
     }
+  }
+
+  /**
+   * Proactive result summary: a finished delegation gets its own chat task so
+   * the user sees the outcome without having to ask. Runs on the same queue as
+   * user turns, so it can never interleave with one.
+   */
+  async function summarizeDelegate(
+    session: string,
+    state: string,
+    artifact: string,
+    correlationId: string
+  ): Promise<void> {
+    const { taskId, contextId } = deps.newIds();
+    const ctx: TaskCtx = { taskId, contextId, correlationId, from };
+    await runTurn(ctx, summaryPrompt(session, state, artifact));
   }
 
   /**
@@ -273,7 +327,16 @@ export async function startChatOps(deps: ChatOpsDeps): Promise<ChatOpsHandle> {
       }
       if (!isFinal(ev)) return;
       const state = stateOf(ev.payload) ?? "completed";
-      pendingNotices.push(notice(session, state, rec.artifact));
+      // Snapshot: `prune` clears the record while the summary turn is queued.
+      const artifact = rec.artifact;
+      const corr = rec.correlationId;
+      // Report the result now instead of waiting for the user's next turn.
+      // pendingNotices survives only as the fallback for a summary that fails.
+      queue = queue
+        .then(() => summarizeDelegate(session, state, artifact, corr))
+        .catch(() => {
+          pendingNotices.push(notice(session, state, artifact));
+        });
       // Worker publishes its own agent-closed via bus.close(); we only GC.
       void gcPod(session)
         .catch(() => {
