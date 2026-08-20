@@ -24,11 +24,20 @@ export async function replayTaskEvents(nc: NatsConnection, taskId: string): Prom
   opts.deliverAll();
   const sub = await nc.jetstream().subscribe(subject, opts);
   const out: Envelope[] = [];
-  for await (const m of sub) {
-    out.push(parseEnvelope(m.data));
-    if (out.length >= count) break;
+  let seen = 0;
+  try {
+    for await (const m of sub) {
+      seen++;
+      try {
+        out.push(parseEnvelope(m.data));
+      } catch {
+        // Skip malformed envelopes
+      }
+      if (seen >= count) break;
+    }
+  } finally {
+    sub.unsubscribe();
   }
-  sub.unsubscribe();
   return out;
 }
 
@@ -40,7 +49,13 @@ export async function subscribeTaskEvents(
   opts.deliverAll();
   const sub = await nc.jetstream().subscribe(taskEventsSubject(taskId), opts);
   (async () => {
-    for await (const m of sub) onEnvelope(parseEnvelope(m.data));
+    for await (const m of sub) {
+      try {
+        onEnvelope(parseEnvelope(m.data));
+      } catch {
+        // Skip malformed envelopes
+      }
+    }
   })().catch(() => { /* subscription closed */ });
   return () => sub.unsubscribe();
 }

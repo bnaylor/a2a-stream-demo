@@ -41,4 +41,36 @@ describe.skipIf(!url)("client (requires NATS_URL)", () => {
       await nc.close();
     }
   }, 15_000);
+
+  it("skips malformed envelopes and continues processing", async () => {
+    const nc = await connect({ servers: url });
+    try {
+      await ensureStream(await nc.jetstreamManager());
+      const taskId = newTaskId();
+      const subject = taskEventsSubject(taskId);
+      const mk = (i: number) =>
+        makeEnvelope({ kind: "message-chunk", correlationId: "corr-t", taskId,
+          contextId: "ctx-t", from, payload: { seq: i } });
+
+      // Publish: valid, garbage, valid
+      await publishEnvelope(nc, subject, mk(0));
+      const js = await nc.jetstream();
+      await js.publish(subject, new TextEncoder().encode("not valid json at all"));
+      await publishEnvelope(nc, subject, mk(1));
+
+      // Cold replay skips garbage, returns only valid envelopes
+      const replayed = await replayTaskEvents(nc, taskId);
+      expect(replayed.map((e) => (e.payload as { seq: number }).seq)).toEqual([0, 1]);
+
+      // Live subscription skips garbage and continues
+      const seen: Envelope[] = [];
+      const stop = await subscribeTaskEvents(nc, taskId, (e) => seen.push(e));
+      await publishEnvelope(nc, subject, mk(2));
+      await new Promise((r) => setTimeout(r, 500));
+      stop();
+      expect(seen.map((e) => (e.payload as { seq: number }).seq)).toEqual([0, 1, 2]);
+    } finally {
+      await nc.close();
+    }
+  }, 15_000);
 });
