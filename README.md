@@ -18,3 +18,15 @@ npm test                # unit tests (integration tests skip without NATS_URL)
 npm run typecheck
 NATS_URL=nats://…:4222 npm run smoke   # end-to-end against a real NATS
 ```
+
+### Chat from a dev box
+
+Run a terminal chat client against the live cluster:
+
+```bash
+NATS_URL=nats://10.3.10.3:30898 npx tsx scripts/chat.ts
+```
+
+Type prompts; the chatops agent (running in the cluster) will reply, optionally delegating to worker pods. 
+Messages from the cluster stream back live, prefixed by session name (e.g. `[worker-…]`).
+Ctrl-D to exit.
