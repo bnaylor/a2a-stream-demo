@@ -11,5 +11,6 @@ spec:
       port: 9222
       targetPort: 9222
       # NodePort: the browser on the LAN reaches ws://10.3.10.<node>:<nodePort>.
-      # Auto-assigned now; pin it in the local overlay once chosen.
+      # UI default (this is the WebSocket listener).
+      nodePort: 30222
   type: NodePort

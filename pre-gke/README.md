@@ -67,3 +67,26 @@ files and review fixes via git instead of scp.
      `kubectl -n a2a-demo get pods` shows the worker pod appear and complete;
      asking `what is session worker-… doing?` gets a summary from replay.
 5. Report the transcript + `kubectl -n a2a-demo get pods -w` output back via PR comment.
+
+## M3 handoff (rune — audience-facing demo)
+
+1. Build + push the web image from repo root:
+   `docker build -t 10.3.10.52:5000/a2a-demo/web:latest -f web/Dockerfile . && docker push 10.3.10.52:5000/a2a-demo/web:latest`
+2. `kubectl apply -k pre-gke/` (re-applies all manifests, including the pinned NodePorts).
+3. Verify: `kubectl -n a2a-demo rollout status deploy web` → should be Running within seconds.
+4. Open a browser and navigate to **`http://10.3.10.3:30080`** (or any node IP from the cluster, e.g., `10.3.10.4:30080`).
+5. Audience interaction: type a chat message (e.g., "write a haiku about Kubernetes") → expect:
+   - Message echoes back on screen (stream from user side).
+   - `[worker-…]` chunks arrive and render as bare text.
+   - Worker delegate lines interleave as they stream.
+   - Pulses travel the rail (visual feedback on the bus).
+   - Worker tap appears/greys (Kubernetes pod lifecycle).
+   - Stream counter climbs (events count).
+   - Tap-click ghost replay runs (session replay on tap).
+6. After demo, report back: screenshot + transcript (copy/paste from browser console or the visible chat log).
+
+**Technical notes for the operator:**
+- The web image is built in the standard nginx+spa pattern: `web/Dockerfile` multi-stage build compiles the Vite app, then serves it via nginx.
+- NodePorts pinned: `nats-ws` on 30222 (websocket, no TLS), `web` on 30080 (HTTP).
+- The browser connects to the WebSocket at `ws://10.3.10.<node>:30222` (hardcoded in the UI, or overridable via `?ws=` query param).
+- No tooling needed on the demo machine — just a browser.

@@ -4,6 +4,5 @@ node_modules
 .superpowers
 docs
 pre-gke
-web
 scripts
 *.md

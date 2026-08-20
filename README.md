@@ -75,3 +75,35 @@ scratch directory.
 ```
 Delegate this: write a one-page design memo arguing for durable event streams over point-to-point RPC for agent-to-agent messaging. Draft it three times in your scratch directory, critiquing your own previous draft in writing each time, then give me the final draft plus the critiques.
 ```
+
+## Demo (browser)
+
+**Local development:** start a dev NATS server (with JetStream and WebSocket), run the fake ChatOps agent, and the Vite dev server:
+
+```bash
+# Terminal A: start NATS with JetStream + WebSocket
+scripts/dev-ws.sh
+
+# Terminal B: run the fake ChatOps agent
+NATS_URL=nats://127.0.0.1:4348 npx tsx scripts/fake-chatops.ts
+
+# Terminal C: start the web UI
+npm run -w web dev
+```
+
+Then open `http://localhost:5173` in your browser. Type a message and watch it flow:
+- Your message echoes back (stream from the client).
+- Fake ChatOps chunks render as they arrive.
+- Worker delegate lines interleave.
+- Pulses travel the rail (visual feedback on the event bus).
+- Worker tap appears/greys (ephemeral pod lifecycle).
+- Stream counter climbs (event count).
+- Tap-click ghost replay runs (session replay).
+
+**Override the WebSocket URL** if needed (e.g., on a remote machine or different port):
+
+```
+http://localhost:5173/?ws=ws://10.3.10.3:30222
+```
+
+**Live cluster demo:** see `pre-gke/README.md` (M3 handoff section) for the operator's guide to deploying and running the demo on the microk8s cluster.
