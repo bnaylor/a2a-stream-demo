@@ -1,0 +1,11 @@
+{
+  "name": "@a2a-demo/agents-common",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "dependencies": {
+    "@a2a-demo/protocol": "*",
+    "nats": "^2.29.0"
+  }
+}
