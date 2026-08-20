@@ -2,10 +2,11 @@
   "name": "a2a-stream-demo",
   "private": true,
   "type": "module",
-  "workspaces": ["protocol", "agents/*"],
+  "workspaces": ["protocol", "agents/*", "web"],
   "scripts": {
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit",
+    "typecheck:web": "tsc -p web --noEmit",
     "smoke": "tsx scripts/smoke.ts"
   },
   "devDependencies": {

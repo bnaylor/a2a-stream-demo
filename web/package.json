@@ -1,0 +1,25 @@
+{
+  "name": "@a2a-demo/web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest"
+  },
+  "dependencies": {
+    "react": "^18",
+    "react-dom": "^18",
+    "nats.ws": "^1.19",
+    "@a2a-demo/protocol": "*"
+  },
+  "devDependencies": {
+    "vite": "^5",
+    "@vitejs/plugin-react": "^4",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0",
+    "@types/react": "^18",
+    "@types/react-dom": "^18"
+  }
+}
