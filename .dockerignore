@@ -1,4 +1,8 @@
 node_modules
+# Nested copies too, or the build context carries every workspace's deps and a
+# stale local web/dist into the image build.
+**/node_modules
+**/dist
 .git
 .claude
 .superpowers

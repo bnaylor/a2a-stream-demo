@@ -24,12 +24,22 @@ export const MAX_PULSES = 200;
 
 export type AgentStatus = "live" | "stale" | "done" | "closed";
 
+/** The browser's own link to the bus, which is not an agent lifecycle. */
+export type ConnectionState = "connecting" | "up" | "down";
+
 export interface AgentView {
   session: string;
   agentType: string;
   status: AgentStatus;
   /** ms since epoch, from the heartbeat event (not the payload's clock). */
   lastHeartbeat?: number;
+  /**
+   * Browser-clock time of the first `tick` that saw this agent, used as the
+   * staleness baseline until a real heartbeat arrives. Seeded from the tick
+   * rather than the card's `ts` on purpose: staleness is measured against the
+   * browser's clock, and pod clocks drift.
+   */
+  firstSeen?: number;
   /** Latest `[progress] ` note, shown under the agent's tap. */
   statusLine?: string;
 }
@@ -74,13 +84,15 @@ export interface UiState {
   chat: ChatEntry[];
   pulses: Pulse[];
   streamMsgCount: number;
+  connection: ConnectionState;
 }
 
 export type BusEvent =
   | { type: "envelope"; env: Envelope; live: boolean }
   /** `agentType` comes off the heartbeat subject; absent only for malformed ones. */
   | { type: "heartbeat"; session: string; agentType?: string; at: number }
-  | { type: "tick"; now: number };
+  | { type: "tick"; now: number }
+  | { type: "connection"; state: ConnectionState };
 
 /** Stand-in agentType for a pod we have only ever heard heartbeat from. */
 export const UNKNOWN_AGENT_TYPE = "unknown";
@@ -91,6 +103,7 @@ export const initialState: UiState = {
   chat: [],
   pulses: [],
   streamMsgCount: 0,
+  connection: "connecting",
 };
 
 /**
@@ -328,14 +341,24 @@ export function reduce(state: UiState, event: BusEvent): UiState {
     case "tick": {
       let agents: Map<string, AgentView> | undefined;
       for (const [session, agent] of state.agents) {
-        if (agent.lastHeartbeat === undefined) continue;
         if (agent.status !== "live" && agent.status !== "stale") continue;
-        const want: AgentStatus = event.now - agent.lastHeartbeat > STALE_MS ? "stale" : "live";
+        const since = agent.lastHeartbeat ?? agent.firstSeen;
+        // Never heard from at all yet: start its clock now, so an agent whose
+        // card arrived but whose heartbeats never do still ages out.
+        if (since === undefined) {
+          agents ??= new Map(state.agents);
+          agents.set(session, { ...agent, firstSeen: event.now });
+          continue;
+        }
+        const want: AgentStatus = event.now - since > STALE_MS ? "stale" : "live";
         if (want === agent.status) continue;
         agents ??= new Map(state.agents);
         agents.set(session, { ...agent, status: want });
       }
       return agents ? { ...state, agents } : state;
     }
+
+    case "connection":
+      return state.connection === event.state ? state : { ...state, connection: event.state };
   }
 }

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import type { ChatEntry } from "./model";
-import { corrColor } from "./model";
+import type { ChatEntry } from "./model.ts";
+import { corrColor } from "./model.ts";
 
 interface ChatProps {
   entries: ChatEntry[];
@@ -44,13 +44,6 @@ export default function Chat({ entries, onPublishChat }: ChatProps) {
       setText("");
     }
   };
-
-  // Group entries by correlation ID to add chips
-  const entriesByCorr = new Map<string, ChatEntry[]>();
-  entries.forEach((entry) => {
-    const curr = entriesByCorr.get(entry.correlationId) ?? [];
-    entriesByCorr.set(entry.correlationId, [...curr, entry]);
-  });
 
   // Build the transcript with corr chips
   const renderedEntries = entries.map((entry, idx) => {

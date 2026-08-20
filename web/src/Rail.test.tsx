@@ -1,8 +1,11 @@
+/**
+ * @vitest-environment jsdom
+ */
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { makeEnvelope, type Envelope } from "@a2a-demo/protocol/src/envelope.ts";
 import { initialState, reduce, type BusEvent, type UiState } from "./model.ts";
-import Rail from "./Rail";
+import Rail from "./Rail.tsx";
 
 const CORR = "corr-rail";
 
@@ -84,6 +87,20 @@ describe("Rail", () => {
     const svg = container.querySelector("svg");
     expect(svg?.getAttribute("role")).toBe("group");
     expect(svg?.getAttribute("aria-label")).toBe("NATS bus topology");
+  });
+
+  it("reports the browser's own link on the you tap", () => {
+    const up = reduce(seeded(), { type: "connection", state: "up" });
+    const { rerender, container } = render(<Rail state={up} />);
+    expect(screen.getByText("websocket")).toBeDefined();
+
+    // A dead link must be visible on the rail, not just in the console.
+    rerender(<Rail state={reduce(up, { type: "connection", state: "down" })} />);
+    expect(screen.getByText("link down")).toBeDefined();
+    expect(container.querySelector(".tap-you")?.getAttribute("class")).toContain("tap-stale");
+
+    rerender(<Rail state={reduce(up, { type: "connection", state: "connecting" })} />);
+    expect(screen.getByText("connecting")).toBeDefined();
   });
 
   it("runs a ghost replay from a tap click and names it in the footer", () => {

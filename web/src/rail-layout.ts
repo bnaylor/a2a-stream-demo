@@ -120,7 +120,9 @@ export function buildGhost(state: UiState, session: string): GhostStep[] {
       label: KIND_LABEL[p.kind],
       correlationId: p.correlationId,
     }));
-  if (observed.length > 0) return observed.slice(0, MAX_GHOST_STEPS);
+  // The tail, not the head: the last thing a task did — the terminal status —
+  // is the point of replaying it.
+  if (observed.length > 0) return observed.slice(-MAX_GHOST_STEPS);
 
   const tasks = [...state.tasks.values()].filter((t) => t.owner === session);
   if (tasks.length === 0) return [];
@@ -149,5 +151,5 @@ export function buildGhost(state: UiState, session: string): GhostStep[] {
     }
     steps.push({ kind: "status-update", label: `status · ${task.state}`, correlationId: corr });
   }
-  return steps.slice(0, MAX_GHOST_STEPS);
+  return steps.slice(-MAX_GHOST_STEPS);
 }

@@ -9,6 +9,7 @@ import {
   type UiState,
 } from "./model.ts";
 import {
+  MAX_GHOST_STEPS,
   MIN_WORKER_PITCH,
   WORKER_PITCH,
   buildGhost,
@@ -214,6 +215,16 @@ describe("buildGhost", () => {
     ]);
     expect(steps.every((g) => g.correlationId === CORR)).toBe(true);
     expect(steps.every((g) => g.label.length > 0)).toBe(true);
+  });
+
+  it("keeps the most recent steps when a session has more than the cap", () => {
+    let s = initialState;
+    for (let i = 0; i < MAX_GHOST_STEPS + 10; i++) s = reduce(s, ev(chunk("otter", `c${i}`)));
+    s = reduce(s, ev(status("otter", "completed", true)));
+    const steps = buildGhost(s, "otter");
+    expect(steps).toHaveLength(MAX_GHOST_STEPS);
+    // The terminal event is the payoff of a replay; it must survive the cap.
+    expect(steps[steps.length - 1].kind).toBe("status-update");
   });
 
   it("ignores other sessions' pulses", () => {

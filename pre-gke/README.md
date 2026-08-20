@@ -75,10 +75,13 @@ files and review fixes via git instead of scp.
 2. `kubectl apply -k pre-gke/` (re-applies all manifests, including the pinned NodePorts).
 3. Verify: `kubectl -n a2a-demo rollout status deploy web` → should be Running within seconds.
 4. Open a browser and navigate to **`http://10.3.10.3:30080`** (or any node IP from the cluster, e.g., `10.3.10.4:30080`).
+   **Preflight:** if the page was open before chatops first started, reload it once — the rail's
+   `you` tap should read `websocket`, not `connecting` or `link down`. Taps from earlier rehearsals
+   will reappear on the rail: the UI replays the last 24 h of the stream on load, by design.
 5. Audience interaction: type a chat message (e.g., "write a haiku about Kubernetes") → expect:
-   - Message echoes back on screen (stream from user side).
-   - `[worker-…]` chunks arrive and render as bare text.
-   - Worker delegate lines interleave as they stream.
+   - Your message echoes back on screen — from the stream, not from local state.
+   - ChatOps' reply streams in as bare text, no prefix.
+   - Worker lines interleave, each prefixed with its `[session]`.
    - Pulses travel the rail (visual feedback on the bus).
    - Worker tap appears/greys (Kubernetes pod lifecycle).
    - Stream counter climbs (events count).

@@ -91,7 +91,17 @@ NATS_URL=nats://127.0.0.1:4348 npx tsx scripts/fake-chatops.ts
 npm run -w web dev
 ```
 
-Then open `http://localhost:5173` in your browser. Type a message and watch it flow:
+Then open:
+
+```
+http://localhost:5173/?ws=ws://127.0.0.1:9222
+```
+
+The `?ws=` override is **required** locally. Without it the UI dials
+`ws://localhost:30222` — the cluster's NodePort, which nothing is listening on
+during local dev — and the `you` tap will sit on `link down`.
+
+Type a message and watch it flow:
 - Your message echoes back (stream from the client).
 - Fake ChatOps chunks render as they arrive.
 - Worker delegate lines interleave.
@@ -100,7 +110,7 @@ Then open `http://localhost:5173` in your browser. Type a message and watch it f
 - Stream counter climbs (event count).
 - Tap-click ghost replay runs (session replay).
 
-**Override the WebSocket URL** if needed (e.g., on a remote machine or different port):
+**Point the dev server at the cluster instead** by overriding the same param:
 
 ```
 http://localhost:5173/?ws=ws://10.3.10.3:30222

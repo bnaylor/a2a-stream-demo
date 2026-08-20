@@ -1,9 +1,9 @@
 import { useEffect, useReducer, useRef } from "react";
-import { reduce, initialState } from "./model";
-import { startBus, type BusHandle } from "./bus";
-import { wsUrl } from "./config";
-import Chat from "./Chat";
-import Rail from "./Rail";
+import { reduce, initialState } from "./model.ts";
+import { startBus, type BusHandle } from "./bus.ts";
+import { wsUrl } from "./config.ts";
+import Chat from "./Chat.tsx";
+import Rail from "./Rail.tsx";
 import "./styles.css";
 
 export default function App() {
@@ -11,20 +11,36 @@ export default function App() {
   const busHandleRef = useRef<BusHandle | null>(null);
 
   useEffect(() => {
+    // StrictMode runs this effect twice in dev, and cleanup fires before the
+    // first `startBus` resolves — without this flag the first connection is
+    // never closed and every envelope gets dispatched twice.
+    let cancelled = false;
+
     const connect = async () => {
       try {
-        busHandleRef.current = await startBus(wsUrl(), dispatch);
+        const handle = await startBus(wsUrl(), dispatch);
+        if (cancelled) {
+          void handle.close().catch(() => {
+            /* already going away */
+          });
+          return;
+        }
+        busHandleRef.current = handle;
       } catch (error) {
+        // The page is now useless, so say so on the rail rather than only here.
         console.error("Failed to connect to bus:", error);
+        if (!cancelled) dispatch({ type: "connection", state: "down" });
       }
     };
 
-    connect();
+    void connect();
 
     return () => {
+      cancelled = true;
       busHandleRef.current?.close().catch(() => {
         /* ignore */
       });
+      busHandleRef.current = null;
     };
   }, []);
 

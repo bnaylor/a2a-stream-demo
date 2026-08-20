@@ -1,8 +1,11 @@
+/**
+ * @vitest-environment jsdom
+ */
 import { describe, expect, it, vi } from "vitest";
 import { render, screen, cleanup } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import Chat from "./Chat";
-import type { ChatEntry } from "./model";
+import Chat from "./Chat.tsx";
+import type { ChatEntry } from "./model.ts";
 
 describe("Chat component", () => {
   it("renders all four entry kinds with their affordances", () => {

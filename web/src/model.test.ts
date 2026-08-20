@@ -187,6 +187,35 @@ describe("reduce: agent lifecycle", () => {
   });
 });
 
+describe("reduce: connection", () => {
+  it("starts out connecting", () => {
+    expect(initialState.connection).toBe("connecting");
+  });
+
+  it("records the connection state", () => {
+    const s = reduce(initialState, { type: "connection", state: "up" });
+    expect(s.connection).toBe("up");
+    expect(reduce(s, { type: "connection", state: "down" }).connection).toBe("down");
+  });
+
+  it("is a no-op when the state has not changed", () => {
+    const up = reduce(initialState, { type: "connection", state: "up" });
+    expect(reduce(up, { type: "connection", state: "up" })).toBe(up);
+  });
+
+  it("does not count as stream traffic", () => {
+    const s = reduce(initialState, { type: "connection", state: "up" });
+    expect(s.streamMsgCount).toBe(0);
+    expect(s.pulses).toHaveLength(0);
+  });
+
+  it("leaves the agents it already knows about alone", () => {
+    const seeded = apply(initialState, ev(card("otter")));
+    const s = reduce(seeded, { type: "connection", state: "down" });
+    expect(s.agents.get("otter")?.status).toBe("live");
+  });
+});
+
 describe("reduce: staleness", () => {
   const seeded = apply(initialState, ev(card("otter")), {
     type: "heartbeat",
@@ -214,6 +243,36 @@ describe("reduce: staleness", () => {
     expect(stale.agents.get("otter")?.status).toBe("stale");
     const revived = reduce(stale, { type: "heartbeat", session: "otter", at: 200_100 });
     expect(revived.agents.get("otter")?.status).toBe("live");
+  });
+
+  // A card with no heartbeat behind it is the signature of a pod that died
+  // before it ever beat, or of a heartbeat subscription that isn't landing.
+  // Either way it must not sit on the rail claiming to be live forever.
+  describe("agents that have never heartbeat", () => {
+    const carded = apply(initialState, ev(card("otter")));
+
+    it("starts the staleness clock on the first tick", () => {
+      const s = reduce(carded, { type: "tick", now: 100_000 });
+      expect(s.agents.get("otter")).toMatchObject({ status: "live", firstSeen: 100_000 });
+    });
+
+    it("stays live at 44 s after that first tick", () => {
+      const started = reduce(carded, { type: "tick", now: 100_000 });
+      const s = reduce(started, { type: "tick", now: 144_000 });
+      expect(s.agents.get("otter")?.status).toBe("live");
+    });
+
+    it("goes stale past 45 s with no heartbeat at all", () => {
+      const started = reduce(carded, { type: "tick", now: 100_000 });
+      const s = reduce(started, { type: "tick", now: 145_001 });
+      expect(s.agents.get("otter")?.status).toBe("stale");
+    });
+
+    it("prefers a real heartbeat over the first-seen fallback", () => {
+      const started = reduce(carded, { type: "tick", now: 100_000 });
+      const beat = reduce(started, { type: "heartbeat", session: "otter", at: 140_000 });
+      expect(reduce(beat, { type: "tick", now: 145_001 }).agents.get("otter")?.status).toBe("live");
+    });
   });
 
   it("does not resurrect closed or done agents on tick", () => {

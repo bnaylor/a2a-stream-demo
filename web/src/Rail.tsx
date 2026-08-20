@@ -19,6 +19,7 @@ import {
   WEB_SESSION,
   corrColor,
   type AgentView,
+  type ConnectionState,
   type UiState,
 } from "./model.ts";
 import {
@@ -88,8 +89,24 @@ function shortName(session: string): string {
   return session.length > NAME_MAX ? `${session.slice(0, NAME_MAX - 1)}…` : session;
 }
 
-function statusText(tap: TapPosition, agent: AgentView | undefined): string {
-  if (tap.kind === "you") return "websocket";
+/** The observer's tap reports the browser's own link, not an agent lifecycle. */
+function linkText(connection: ConnectionState): string {
+  switch (connection) {
+    case "up":
+      return "websocket";
+    case "connecting":
+      return "connecting";
+    case "down":
+      return "link down";
+  }
+}
+
+function statusText(
+  tap: TapPosition,
+  agent: AgentView | undefined,
+  connection: ConnectionState,
+): string {
+  if (tap.kind === "you") return linkText(connection);
   if (!agent) return "awaiting card";
   if (agent.statusLine) return agent.statusLine;
   switch (agent.status) {
@@ -357,7 +374,14 @@ export default function Rail({ state }: { state: UiState }) {
 
         {taps.map((tap) => {
           const agent = state.agents.get(tap.session);
-          const status = tap.kind === "you" ? "live" : (agent?.status ?? "absent");
+          // A broken link borrows the stale look — same amber, same meaning:
+          // this tap is not telling you the truth right now.
+          const status =
+            tap.kind === "you"
+              ? state.connection === "up"
+                ? "live"
+                : "stale"
+              : (agent?.status ?? "absent");
           const phase = ripplePhase.get(tap.session);
           const clickable = tap.kind !== "you" && agent !== undefined;
           return (
@@ -401,10 +425,13 @@ export default function Rail({ state }: { state: UiState }) {
               {tap.kind === "chatops" && <circle className="tap-hub" cx={0} cy={RAIL_Y} r={8.5} />}
               <text className="tap-name" x={0} y={NAME_Y} textAnchor="middle">
                 {shortName(tap.session)}
-                {status === "stale" ? " ?" : ""}
+                {/* The `?` asks "is this pod still there?" — never the right
+                    question about the browser's own socket, which says so in
+                    words on the line below. */}
+                {status === "stale" && tap.kind !== "you" ? " ?" : ""}
               </text>
               <text className="tap-status" x={0} y={STATUS_Y} textAnchor="middle">
-                {statusText(tap, agent)}
+                {statusText(tap, agent, state.connection)}
               </text>
             </g>
             </g>

@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: web
-          # PLACEHOLDER — static nginx serving the built web/ UI.
+          # Static nginx serving the built web/ UI (web/Dockerfile).
           image: 10.3.10.52:5000/a2a-demo/web:latest
           imagePullPolicy: Always
           ports:
