@@ -84,7 +84,9 @@ export default function Chat({ entries, onPublishChat }: ChatProps) {
       content = (
         <div className="chat-entry chat-progress">
           <span>{glyphs.progress}</span>
-          <span>{entry.text}</span>
+          <span>
+            <Markdown text={entry.text} />
+          </span>
         </div>
       );
     } else if (entry.kind === "thinking") {
@@ -96,7 +98,10 @@ export default function Chat({ entries, onPublishChat }: ChatProps) {
             type="button"
             className="thinking-row"
             aria-expanded={open}
-            aria-label={`Thinking log for ${entry.session ?? "agent"}`}
+            // The label carries the latest line as well as the control's
+            // purpose: a bare "Thinking log for otter" would override the row's
+            // content and hide the one thing the row exists to show.
+            aria-label={`Thinking log for ${entry.session ?? "agent"}: ${entry.latest ?? ""}`}
             onClick={() => toggle(entry.id)}
           >
             <span className="thinking-twisty" aria-hidden="true">

@@ -242,6 +242,16 @@ function appendChunk(state: UiState, entry: Omit<ChatEntry, "id">): ChatEntry[] 
 }
 
 /**
+ * A long-running agent can reason for thousands of lines, and every one of
+ * them would otherwise be copied on every subsequent token. Cap the log; a
+ * twisty is a live readout, not an archive.
+ */
+export const MAX_THINKING_LINES = 500;
+/** Trim well past the cap so the re-join is amortised over the next 100 lines. */
+const THINKING_KEEP = 400;
+export const THINKING_TRIM_MARKER = "… (earlier thinking trimmed)";
+
+/**
  * Folds one token-wise thinking delta into whole lines. The model streams
  * fragments, not lines, so the tail line is the open accumulator and only a
  * newline in the delta closes it.
@@ -252,6 +262,14 @@ function mergeThinkingLines(lines: readonly string[], delta: string): string[] {
   next[next.length - 1] += parts[0];
   for (let i = 1; i < parts.length; i++) next.push(parts[i]);
   return next;
+}
+
+/** The trimmed log, or `undefined` when it is still under the cap. */
+function trimThinkingLines(lines: string[]): string[] | undefined {
+  if (lines.length <= MAX_THINKING_LINES) return undefined;
+  // The old marker (always at index 0) falls off with the rest of the head, so
+  // however many times this runs there is exactly one.
+  return [THINKING_TRIM_MARKER, ...lines.slice(lines.length - (THINKING_KEEP - 1))];
 }
 
 /** The collapsed row shows the last line with something on it, never a blank. */
@@ -273,8 +291,17 @@ function appendThinking(state: UiState, entry: Omit<ChatEntry, "id">, delta: str
   const at = state.chat.findIndex(
     (e) => e.kind === "thinking" && e.session === entry.session && e.taskId === entry.taskId,
   );
-  const lines = mergeThinkingLines(at >= 0 ? (state.chat[at].lines ?? []) : [], delta);
-  const patch = { lines, latest: latestLine(lines), text: lines.join("\n") };
+  const prev = at >= 0 ? state.chat[at] : undefined;
+  const grown = mergeThinkingLines(prev?.lines ?? [], delta);
+  const trimmed = trimThinkingLines(grown);
+  const lines = trimmed ?? grown;
+  const patch = {
+    lines,
+    latest: latestLine(lines),
+    // `lines.join("\n")` is exactly the delta stream concatenated, so the
+    // common path just appends and only a trim pays for a re-join.
+    text: trimmed ? trimmed.join("\n") : (prev?.text ?? "") + delta,
+  };
   if (at < 0) return pushChat(state, { ...entry, ...patch });
   const merged = [...state.chat];
   merged[at] = { ...merged[at], ...patch };

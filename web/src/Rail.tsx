@@ -23,6 +23,7 @@ import {
   type UiState,
 } from "./model.ts";
 import {
+  MIN_WORKER_PITCH,
   RAIL_PAD_LEFT,
   RAIL_PAD_RIGHT,
   buildGhost,
@@ -35,6 +36,15 @@ const RAIL_Y = 54;
 const LEAD_LEN = 28;
 const NAME_Y = RAIL_Y + LEAD_LEN + 15;
 const STATUS_Y = NAME_Y + 14;
+/**
+ * The tap's hover footprint: half the minimum pitch either side, from above
+ * the dismiss control down past the status line. The dot, the label and the ✕
+ * are separated by unpainted gaps, and in SVG an unpainted gap is not hovered
+ * — without one continuous target the ✕ vanishes as the cursor travels to it.
+ */
+const SLOT_HALF_W = MIN_WORKER_PITCH / 2;
+const SLOT_TOP = RAIL_Y - 26;
+const SLOT_BOTTOM = STATUS_Y + 5;
 const STRIP_Y = 132;
 /** The replayed chunk's own first line, under the strip. */
 const PEEK_Y = STRIP_Y + 32;
@@ -401,6 +411,18 @@ export default function Rail({ state, onDismiss }: RailProps) {
             // animations drive — a CSS transform would otherwise replace the
             // attribute and snap the tap to x=0.
             <g key={tap.session} className="tap-slot" transform={`translate(${tap.x} 0)`}>
+            {/* Behind everything in the slot, so the painted controls keep
+                their own clicks and only the gaps between them fall through
+                to this. It has no handler: all it does is hold :hover. */}
+            {dismissable && (
+              <rect
+                className="tap-hover-target"
+                x={-SLOT_HALF_W}
+                y={SLOT_TOP}
+                width={SLOT_HALF_W * 2}
+                height={SLOT_BOTTOM - SLOT_TOP}
+              />
+            )}
             <g
               className={`tap tap-${tap.kind} tap-${status}${clickable ? " tap-clickable" : ""}`}
               role={clickable ? "button" : undefined}

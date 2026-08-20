@@ -179,6 +179,14 @@ describe("Chat: inline markdown", () => {
     cleanup();
   });
 
+  it("renders markdown in progress notes too", () => {
+    const { container } = render(
+      <Chat entries={[entry("progress", "fetched **2 of 4** sources")]} onPublishChat={vi.fn()} />,
+    );
+    expect(container.querySelector(".chat-progress strong")?.textContent).toBe("2 of 4");
+    cleanup();
+  });
+
   it("leaves raw HTML in agent text as inert text", () => {
     const { container } = render(
       <Chat entries={[entry("chatops", "<b>not bold</b>")]} onPublishChat={vi.fn()} />,
@@ -202,7 +210,7 @@ describe("Chat: thinking twisties", () => {
 
   it("collapses a thinking entry into one row showing the latest line", () => {
     render(<Chat entries={[thinking]} onPublishChat={vi.fn()} />);
-    const row = screen.getByRole("button", { name: "Thinking log for otter" });
+    const row = screen.getByRole("button", { name: /^Thinking log for otter:/ });
     expect(row.getAttribute("aria-expanded")).toBe("false");
     expect(row.textContent).toContain("▸");
     expect(row.textContent).toContain("[otter]");
@@ -216,7 +224,7 @@ describe("Chat: thinking twisties", () => {
   it("expands to the full log on click and collapses again", async () => {
     const user = userEvent.setup();
     const { container } = render(<Chat entries={[thinking]} onPublishChat={vi.fn()} />);
-    const row = screen.getByRole("button", { name: "Thinking log for otter" });
+    const row = screen.getByRole("button", { name: /^Thinking log for otter:/ });
 
     await user.click(row);
     expect(row.getAttribute("aria-expanded")).toBe("true");
@@ -244,8 +252,8 @@ describe("Chat: thinking twisties", () => {
         onPublishChat={vi.fn()}
       />,
     );
-    expect(screen.getByRole("button", { name: "Thinking log for otter" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Thinking log for lynx" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^Thinking log for otter:/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^Thinking log for lynx:/ })).toBeTruthy();
     cleanup();
   });
 
@@ -264,8 +272,22 @@ describe("Chat: thinking twisties", () => {
       />,
     );
     expect(container.querySelector(".thinking-latest strong")?.textContent).toBe("jetstream");
-    await user.click(screen.getByRole("button", { name: "Thinking log for otter" }));
+    await user.click(screen.getByRole("button", { name: /^Thinking log for otter:/ }));
     expect(container.querySelector(".thinking-log code")?.textContent).toBe("nats");
+    cleanup();
+  });
+
+  // A bare "Thinking log for otter" would override the row's own content and
+  // hide the latest line from a screen reader — the one thing the row shows.
+  it("exposes the latest line in the accessible name, and state via aria-expanded", async () => {
+    const user = userEvent.setup();
+    render(<Chat entries={[thinking]} onPublishChat={vi.fn()} />);
+    const row = screen.getByRole("button", { name: "Thinking log for otter: three" });
+    expect(row.getAttribute("aria-expanded")).toBe("false");
+    await user.click(row);
+    expect(row.getAttribute("aria-expanded")).toBe("true");
+    // The name tracks the readout rather than the open/closed state.
+    expect(row.getAttribute("aria-label")).toBe("Thinking log for otter: three");
     cleanup();
   });
 

@@ -5,6 +5,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { makeEnvelope, type Envelope } from "@a2a-demo/protocol/src/envelope.ts";
 import { initialState, reduce, type BusEvent, type UiState } from "./model.ts";
+import { MIN_WORKER_PITCH } from "./rail-layout.ts";
 import Rail from "./Rail.tsx";
 
 const CORR = "corr-rail";
@@ -252,6 +253,46 @@ describe("Rail: terminal taps", () => {
     rerender(<Rail state={reduce(done(), { type: "dismiss", session: "otter" })} onDismiss={vi.fn()} />);
     expect(screen.queryByText("otter")).toBeNull();
     expect(screen.queryByRole("button", { name: "Replay otter events" })).toBeNull();
+  });
+
+  // The ✕ only exists while the slot is hovered, and in SVG an unpainted gap
+  // is not hovered: without one continuous target the control blinks out as
+  // the cursor travels from the label towards it.
+  it("gives the slot one continuous hover target spanning dot, label and ✕", () => {
+    const { container } = render(<Rail state={done()} onDismiss={vi.fn()} />);
+    const slot = container.querySelector(".tap-slot .tap-hover-target") as SVGRectElement | null;
+    expect(slot).not.toBeNull();
+
+    const x = Number(slot?.getAttribute("x"));
+    const y = Number(slot?.getAttribute("y"));
+    const w = Number(slot?.getAttribute("width"));
+    const h = Number(slot?.getAttribute("height"));
+
+    // Full pitch wide, centred on the tap.
+    expect(w).toBe(MIN_WORKER_PITCH);
+    expect(x).toBe(-MIN_WORKER_PITCH / 2);
+
+    // Tall enough to cover the ✕ above the rail and the status line below it.
+    const dismiss = container.querySelector(".tap-dismiss circle") as SVGCircleElement | null;
+    const cy = Number(dismiss?.getAttribute("cy"));
+    const r = Number(dismiss?.getAttribute("r"));
+    expect(y).toBeLessThanOrEqual(cy - r);
+    const status = container.querySelector(".tap-status") as SVGTextElement | null;
+    expect(y + h).toBeGreaterThanOrEqual(Number(status?.getAttribute("y")));
+
+    // The ✕ sits inside it horizontally too.
+    expect(Number(dismiss?.getAttribute("cx")) + r).toBeLessThanOrEqual(x + w);
+  });
+
+  it("puts the hover target behind the controls, and only where there is one", () => {
+    const { container, rerender } = render(<Rail state={done()} onDismiss={vi.fn()} />);
+    const slot = container.querySelector(".tap-slot:has(.tap-hover-target)");
+    // First child: painted controls stay on top and keep their own clicks.
+    expect(slot?.firstElementChild?.getAttribute("class")).toBe("tap-hover-target");
+
+    // A live worker has nothing to dismiss, so it gets no extra hit area.
+    rerender(<Rail state={seeded()} onDismiss={vi.fn()} />);
+    expect(container.querySelector(".tap-hover-target")).toBeNull();
   });
 
   it("shows no dismiss control at all when the rail has no handler", () => {

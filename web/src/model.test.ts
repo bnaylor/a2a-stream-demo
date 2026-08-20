@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { makeEnvelope, type Envelope } from "@a2a-demo/protocol/src/envelope.ts";
 import {
+  MAX_THINKING_LINES,
+  THINKING_TRIM_MARKER,
   type BusEvent,
   type UiState,
   corrColor,
@@ -514,6 +516,48 @@ describe("reduce: thinking", () => {
     );
     expect(s.chat.map((c) => c.kind)).toEqual(["thinking", "progress"]);
     expect(s.agents.get("otter")?.statusLine).toBe("fetching spec 2/2");
+  });
+
+  // A worker can reason for thousands of lines, and every one of them would
+  // otherwise be copied on every subsequent token.
+  describe("the line cap", () => {
+    const grow = (n: number) => {
+      let s: UiState = initialState;
+      for (let i = 0; i < n; i++) s = reduce(s, think("otter", `line ${i}\n`));
+      return s;
+    };
+
+    it("keeps the log under the cap", () => {
+      const s = grow(MAX_THINKING_LINES + 200);
+      expect(s.chat[0].lines!.length).toBeLessThanOrEqual(MAX_THINKING_LINES);
+    });
+
+    it("drops the oldest lines and keeps the newest", () => {
+      const s = grow(MAX_THINKING_LINES + 200);
+      const lines = s.chat[0].lines!;
+      expect(lines).not.toContain("line 0");
+      expect(lines).toContain(`line ${MAX_THINKING_LINES + 199}`);
+      expect(s.chat[0].latest).toBe(`line ${MAX_THINKING_LINES + 199}`);
+    });
+
+    it("marks the trim exactly once, however many times it runs", () => {
+      const s = grow(MAX_THINKING_LINES * 4);
+      const lines = s.chat[0].lines!;
+      expect(lines.filter((l) => l === THINKING_TRIM_MARKER)).toHaveLength(1);
+      expect(lines[0]).toBe(THINKING_TRIM_MARKER);
+    });
+
+    it("keeps text and lines in step across a trim", () => {
+      const s = grow(MAX_THINKING_LINES + 50);
+      expect(s.chat[0].text).toBe(s.chat[0].lines!.join("\n"));
+    });
+
+    it("does not trim a log that is under the cap", () => {
+      const s = grow(10);
+      expect(s.chat[0].lines).toHaveLength(11); // 10 lines plus the open one
+      expect(s.chat[0].lines).not.toContain(THINKING_TRIM_MARKER);
+      expect(s.chat[0].text).toBe(s.chat[0].lines!.join("\n"));
+    });
   });
 
   it("leaves ordinary delegate output untouched", () => {

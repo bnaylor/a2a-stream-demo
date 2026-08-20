@@ -161,3 +161,90 @@ Observed:
 - Pulse sizing is now near the top of what the trace can carry without the
   wakes of adjacent kinds merging during a burst; further emphasis would want
   a different device (colour or thickness), not more size.
+
+---
+
+# Fix round (review findings 1-4)
+
+## 1. Continuous hover target for the dismiss ✕ — *important*
+
+Correct diagnosis. The ✕ only existed while `.tap-slot:hover`, and in SVG an
+unpainted gap is not hovered: the dot, the label and the ✕ are three painted
+islands, so the cursor crossing the ~6px diagonal between them dropped
+`:hover`, which flipped `pointer-events` back to `none` mid-approach.
+
+Fix: a transparent `<rect class="tap-hover-target">` inside the slot group,
+`MIN_WORKER_PITCH` (84px) wide and centred on the tap, running from 26px above
+the rail (clear of the ✕) down past the status line — `fill: none` plus
+`pointer-events: all`, which is what makes an unpainted rect a hit target. It
+is the group's **first** child, so it sits behind the painted controls and they
+keep their own clicks; the rect has no handler at all, it only holds `:hover`.
+Rendered only on dismissable taps. ✕ visuals unchanged.
+
+**Verified with a real hit-test** (CDP `Input.dispatchMouseEvent`, not scripted
+`.click()`): eight physical `mouseMoved` events along the diagonal from the
+`otter` label to the ✕, sampling computed style and `elementFromPoint` at each:
+
+```
+  step 0 @ (474,233) opacity=1 pointer-events=auto under=tap-name
+  step 2 @ (478,219) opacity=1 pointer-events=auto under=tap-hover-target
+  step 5 @ (483,199) opacity=1 pointer-events=auto under=tap-hover-target
+  step 7 @ (486,185) opacity=1 pointer-events=auto under=tap-dismiss-hit
+  step 8 @ (488,178) opacity=1 pointer-events=auto under=tap-dismiss-x
+  RESULT: control stayed hittable the whole way
+```
+
+Then a physical `mousePressed`/`mouseReleased` at the ✕: taps went
+`you,chatops,otter` → `you,chatops`.
+
+Two unit tests as well: the rect exists and spans the slot geometry (full
+pitch, centred, top above `cy - r` of the ✕, bottom past the status baseline,
+✕ inside horizontally), and it is the first child of the slot and absent on
+live taps.
+
+## 2. Markdown in progress notes
+
+Fixed — `[progress]` text now goes through the same renderer as every other
+kind. Test: a progress entry containing `**2 of 4**` renders a `<strong>`.
+Confirmed live: `<strong>2 of 4</strong>`.
+
+## 3. Twisty accessible name
+
+Correct — a bare "Thinking log for otter" overrode the row's content and hid
+the latest line, the one thing the row exists to show. Now
+`aria-label={`Thinking log for ${session}: ${latest}`}`, which keeps the
+control's purpose *and* the readout; open/closed stays on `aria-expanded`.
+Chose this over dropping the label because the bare content would read as
+"[otter] [thinking] …" with the bracket noise and no statement of what
+activating the control does. Live check: `Thinking log for otter: Let me check
+the parking situation.`
+
+## 4. Thinking log cap and per-delta cost
+
+Fixed both halves:
+
+- **Uncapped growth.** `MAX_THINKING_LINES = 500`; on overflow the log is cut
+  to the newest 399 lines behind a single `… (earlier thinking trimmed)` marker
+  line. Trimming to 400 rather than to the cap means the re-join is amortised
+  over the next 100 lines instead of running on every delta once the cap is
+  reached. The old marker always sits at index 0 and falls off with the rest of
+  the head, so there is exactly one however many times the trim runs.
+- **`join("\n")` per token.** `lines.join("\n")` is by construction just the
+  delta stream concatenated, so the common path is now `prev.text + delta` and
+  only a trim pays for a re-join. The `[...lines]` copy is still there — it is
+  what keeps the reducer pure — but it is now bounded at 500 instead of
+  unbounded. `latest` was already an O(1) scan from the end.
+
+Five tests: stays under the cap, drops oldest / keeps newest and latest, marker
+appears exactly once across four cap-lengths of input, `text === lines.join("\n")`
+across a trim, and no trim under the cap.
+
+## Verification (fix round)
+
+- `npm run -w web test` — **173 passed** (164 → 173, 9 new)
+- `npm run typecheck:web` — clean
+- `npm run -w web build` — green
+- `npm test` (root) — 45 passed / 4 skipped, untouched by this change (the
+  count moved 42 → 45 because the chatops fix round landed in `f476312`
+  meanwhile)
+- `npm run typecheck` (root) — clean

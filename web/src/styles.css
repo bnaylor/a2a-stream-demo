@@ -297,6 +297,14 @@ body {
 
 /* --- dismiss ---------------------------------------------------------------- */
 
+/* Invisible, but hovered: `pointer-events: all` makes an unfilled rect a hit
+   target, which is what keeps the ✕ from blinking out as the cursor crosses
+   the gap between the label and the control. */
+.tap-hover-target {
+  fill: none;
+  pointer-events: all;
+}
+
 .tap-dismiss {
   cursor: pointer;
   opacity: 0;
