@@ -120,3 +120,79 @@ also test 5 (2 notices instead of 1). Reverted; suite green again.
   `/Users/bnaylor/src/a2a-stream-demo/tweaks.md`. Read from there.
 - The UI items and the "more complicated sample prompts" item from tweaks.md are
   untouched — out of scope for this task.
+
+---
+
+# Fix round — review findings 1–3
+
+Commit: `fix(tweaks): full-length summary excerpts, proactive summaries for crashed pods`
+
+## 1. [Important] Summary excerpt was truncating the primary result channel
+`NOTICE_ARTIFACT_CHARS = 500` was fine when a notice was only a nudge, but the
+proactive summary IS the result: workers emit the whole deliverable as one
+artifact, and `task_status` replays it at only `DIGEST_TEXT_CHARS = 120` per
+event, so anything past char 500 was unreachable.
+
+- Added `SUMMARY_ARTIFACT_CHARS = 4000`, used **only** by `summaryPrompt`'s
+  excerpt. `notice()` keeps its 500-char cap.
+- The cache site mattered too: `rec.artifact = boundedExcerpt(textOf(ev.payload))`
+  was clamping to 500 **at write time**, so a bigger read cap alone would have
+  changed nothing. It now caches at `SUMMARY_ARTIFACT_CHARS`; `notice` re-caps
+  to 500 on the way out, which is safe because `boundedExcerpt` is idempotent.
+- Same fence/`safeText` path as before, cap still applied after sentinel
+  stripping and before angle-escaping — the security contract is untouched.
+
+Tests: `carries the full-length artifact into the summary, not the notice
+excerpt` (1611-char artifact with a marker at char 600; asserts the fenced body
+equals the whole artifact) and `still caps the summary excerpt, fence intact, at
+4000 chars` (5000-char artifact → body is exactly 4000, tail absent, one closing
+sentinel). A `fencedBody()` test helper extracts the wrapped text so caps are
+asserted on the body rather than the whole prompt.
+
+## 2. [Minor, user-facing] Crashed pods died silently
+`sweepOnce` publishes its synthetic `failed` **as `chatops`**, so the events
+subscription's spoof guard correctly rejected it — no summary, and (post-fix-1)
+no notice either. A crashed pod produced nothing at all for the user.
+
+Fix: after publishing the synthetic final for a tracked delegation, `sweepOnce`
+now calls `queueSummary(rec, "failed")` directly, bypassing the event round-trip.
+**The spoof guard is untouched.** Only the `!events.some(isFinal)` branch fires
+it, so a delegation that already reported a real terminal event is not summarized
+twice.
+
+Refactor: the enqueue-with-notice-fallback logic is now one `queueSummary(rec,
+state)` helper shared by the event path and the sweep path, which also removed
+the hand-rolled snapshot of `artifact`/`correlationId` at the event site.
+
+Test: `sweep proactively summarizes a crashed pod's delegation as failed` — a
+delegate gets a partial artifact, its pod goes `Failed` with no terminal event,
+sweep runs; asserts the summary prompt is phrased with the failed state and
+carries the partial artifact, that it lands as a real chatops chat task ending
+`final: true`, and that the user's next turn carries no duplicate notice.
+
+## 3. [Accepted risk] Documented only
+A thrown summary publishes a `failed` final on a task the user never requested.
+Behavior left as-is; added a comment on `summarizeDelegate` noting the UI renders
+it as an ordinary chatops task (verified by the web batch's tests) and that the
+caller falls back to a next-turn notice, so the result is not lost.
+
+## Verification
+- `npx vitest run agents/chatops` → 15 passed (12 → 15).
+- `npm test` → 45 passed | 4 skipped (the 4 skips are the NATS-dependent
+  protocol tests; 49/49 with `NATS_URL` set).
+- `npm run typecheck` → clean. `kubectl kustomize pre-gke/` → OK (render only).
+
+Mutation checks:
+- Reverting `summaryPrompt` to the 500-char `safeText(artifact)` fails both
+  fix-1 tests.
+- Deleting `queueSummary(rec, "failed")` from `sweepOnce` fails the sweep test.
+Both reverted; suite green.
+
+## Remaining concerns
+- 4000 chars is a judgement call, not a measured worker-output distribution. It
+  is ~8x the notice cap and comfortably under any context pressure, but a worker
+  writing a genuinely long report will still be clipped — and the summary prompt
+  gives the model no signal that truncation happened. If that bites, the honest
+  fix is a "(truncated)" marker rather than a bigger number.
+- The sweep summary reuses `rec.correlationId` from a delegation whose chat turn
+  may be long over. Same as the event path; noted, not changed.

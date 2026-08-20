@@ -6,6 +6,10 @@ type Published = { taskId: string; env: Envelope };
 
 const tick = () => new Promise((r) => setTimeout(r, 20));
 
+/** The text the fence actually wraps, so caps can be asserted on it directly. */
+const fencedBody = (s: string): string =>
+  /<untrusted_worker_output[^>]*>([\s\S]*)<\/untrusted_worker_output>/.exec(s)![1];
+
 async function* okStream() {
   yield { type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "ok" } } };
   yield { type: "result", subtype: "success", result: "ok" };
@@ -197,6 +201,28 @@ describe("startChatOps", () => {
     expect(prompt).not.toContain("worker-test-otter");
   });
 
+  it("carries the full-length artifact into the summary, not the notice excerpt", async () => {
+    const f = makeFakes();
+    // Workers emit the whole deliverable as one artifact, so the summary — the
+    // primary result channel — must see well past the 500-char notice cap.
+    const long = "A".repeat(600) + "TAIL-AT-600" + "B".repeat(1000);
+    await finishDelegate(f, "completed", long);
+    const prompt = f.prompts.at(-1)!;
+    expect(prompt).toContain("TAIL-AT-600");
+    const body = fencedBody(prompt);
+    expect(body).toBe(long); // whole artifact, not the first 500 chars
+    expect(body.length).toBeGreaterThan(500);
+  });
+
+  it("still caps the summary excerpt, fence intact, at 4000 chars", async () => {
+    const f = makeFakes();
+    await finishDelegate(f, "completed", "C".repeat(5000) + "PAST-THE-CAP");
+    const prompt = f.prompts.at(-1)!;
+    expect(fencedBody(prompt)).toHaveLength(4000);
+    expect(prompt).not.toContain("PAST-THE-CAP");
+    expect(prompt.match(/<\/untrusted_worker_output>/g)).toHaveLength(1);
+  });
+
   it("summarizes a failed delegate too, phrased with the failed state", async () => {
     const f = makeFakes();
     await finishDelegate(f, "failed", "ran out of budget");
@@ -286,5 +312,32 @@ describe("startChatOps", () => {
     expect(synthetic?.env.kind).toBe("status-update");
     expect((synthetic?.env.payload as { status: { state: string } }).status.state).toBe("failed");
     expect(f.deleted).toContain("a2a-worker-test-otter");
+  });
+
+  it("sweep proactively summarizes a crashed pod's delegation as failed", async () => {
+    const f = makeFakes();
+    const handle = await startChatOps(f.deps);
+    f.sendInbox(f.chatTurn("task-c5", "research something"));
+    await tick();
+    await handle.delegate("job");
+    // The worker got partway before its pod died.
+    f.eventSubs.get("task-d1")!(artifactFrom("task-d1", "half an answer", "worker-test-otter"));
+    f.setPods([{ name: "a2a-worker-test-otter", session: "worker-test-otter", phase: "Failed" }]);
+    f.setReplay([]); // no terminal event ever published
+    await handle.sweepOnce();
+    await tick();
+    // The synthetic final is published by "chatops", so the spoof guard eats
+    // it — the summary has to be enqueued directly or the crash is silent.
+    const prompt = f.prompts.at(-1)!;
+    expect(prompt).toContain("Session worker-test-otter just failed.");
+    expect(prompt).toContain("half an answer");
+    // ...and it lands as a real chat task, not just a prompt.
+    const summary = f.published.filter((p) => p.taskId === "task-d2");
+    expect(summary.at(-1)!.env.from?.session).toBe("chatops");
+    expect((summary.at(-1)!.env.payload as { final: boolean }).final).toBe(true);
+    // No double-report: the user's next turn carries no notice for it.
+    f.sendInbox(f.chatTurn("task-c6", "anything new?"));
+    await tick();
+    expect(f.prompts.at(-1)!).toBe("anything new?");
   });
 });
