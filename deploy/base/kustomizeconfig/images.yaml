@@ -1,0 +1,12 @@
+# Extra fieldSpec for the built-in `images:` transformer.
+#
+# ChatOps creates worker pods itself, so the worker image is not a container
+# image anywhere in these manifests — it is the WORKER_IMAGE env var on the
+# chatops Deployment. Teaching the image transformer about that field lets each
+# overlay set its registry once, in `images:`, instead of patching env.
+#
+# Only values that parse as one of the `images:` names are rewritten, so other
+# env vars are untouched. Overlays inherit this via the base kustomization.
+images:
+  - path: spec/template/spec/containers/env/value
+    kind: Deployment

@@ -7,7 +7,7 @@ delegator answer "what is session X doing?" by replay.
 
 - Design spec: `docs/superpowers/specs/2026-08-19-a2a-jetstream-demo-design.md`
 - Wire protocol: `protocol/SPEC.md`
-- Cluster manifests (homelab, pre-GKE): `pre-gke/`
+- Cluster manifests (kustomize base + local/gke overlays): `deploy/`
 - M1 plan: `docs/superpowers/plans/2026-08-19-a2a-demo-m1-protocol.md`
 
 ## Dev
@@ -114,9 +114,10 @@ Then open:
 http://localhost:5173/?ws=ws://127.0.0.1:9222
 ```
 
-The `?ws=` override is **required** locally. Without it the UI dials
-`ws://localhost:30222` — the cluster's NodePort, which nothing is listening on
-during local dev — and the `you` tap will sit on `link down`.
+The `?ws=` override is **required** locally.  Without it the UI dials
+same-origin `/ws`, which in the cluster is nginx proxying to the `nats-ws`
+Service.  The Vite dev server has no such proxy, so the `you` tap sits on
+`link down`.
 
 Type a message and watch it flow:
 - Your message echoes back (stream from the client).
@@ -127,10 +128,48 @@ Type a message and watch it flow:
 - Stream counter climbs (event count).
 - Tap-click ghost replay runs (session replay).
 
-**Point the dev server at the cluster instead** by overriding the same param:
+**Point the dev server at the cluster instead** by overriding the same param.
+The `nats-ws` NodePort stays pinned in the local overlay for exactly this
+(and for debugging), even though the deployed UI no longer uses it:
 
 ```
 http://localhost:5173/?ws=ws://10.3.10.3:30222
 ```
 
-**Live cluster demo:** see `pre-gke/README.md` (M3 handoff section) for the operator's guide to deploying and running the demo on the microk8s cluster.
+**Live cluster demo:** `kubectl apply -k deploy/overlays/local`, then browse
+to `http://10.3.10.3:30080`.  See `deploy/README.md` for the operator's guide.
+
+## GKE
+
+Project `bnaylor-kagents-dev`, cluster `a2a-stream-demo` in
+`northamerica-northeast1-a`.  Agents talk to Claude through Vertex in
+`us-east5` using Workload Identity, so there's no API key in the cluster.
+
+**Prerequisite:** the Claude models have to be enabled in Vertex Model Garden
+for `us-east5` on that project before any of this works.  One-time
+click-through in the console, per model.  Without it the agents come up fine
+and then 404 on their first turn.
+
+Build and push all three images:
+
+```bash
+gcloud builds submit --config cloudbuild.yaml --project bnaylor-kagents-dev .
+```
+
+Create the basic-auth secret (once; the web Service is a public
+LoadBalancer):
+
+```bash
+kubectl -n a2a-demo create secret generic web-htpasswd \
+  --from-literal=htpasswd="$(htpasswd -nbB demo 'SOME-PASSWORD')"
+```
+
+Deploy, and find the address:
+
+```bash
+kubectl apply -k deploy/overlays/gke
+kubectl -n a2a-demo get svc web -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+```
+
+The LB takes a minute or two to get an IP.  Workload Identity bindings and
+the rest of the one-time setup are in `deploy/README.md`.

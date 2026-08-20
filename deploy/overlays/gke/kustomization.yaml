@@ -1,0 +1,38 @@
+# GKE overlay — `kubectl apply -k deploy/overlays/gke`.
+#
+# Cluster: a2a-stream-demo, zone northamerica-northeast1-a, project
+# bnaylor-kagents-dev. Images come from Artifact Registry (built by
+# cloudbuild.yaml at the repo root).
+#
+# Deltas from base: AR image refs, a public LoadBalancer for the UI behind HTTP
+# basic auth, Workload Identity annotations on both KSAs, and Vertex env on
+# ChatOps (which passes it through to worker pods).
+#
+# Out-of-band prerequisite: the `web-htpasswd` Secret. See deploy/README.md.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: a2a-demo
+
+resources:
+  - ../../base
+
+images:
+  - name: a2a-demo/chatops
+    newName: northamerica-northeast1-docker.pkg.dev/bnaylor-kagents-dev/a2a-demo/chatops
+  - name: a2a-demo/worker
+    newName: northamerica-northeast1-docker.pkg.dev/bnaylor-kagents-dev/a2a-demo/worker
+  - name: a2a-demo/web
+    newName: northamerica-northeast1-docker.pkg.dev/bnaylor-kagents-dev/a2a-demo/web
+
+configMapGenerator:
+  - name: web-nginx-gke
+    files:
+      - default.conf=nginx-gke.conf
+
+patches:
+  - path: web-svc-lb.yaml
+  - path: workload-identity.yaml
+  - path: chatops-vertex.yaml
+  - path: web-auth.yaml

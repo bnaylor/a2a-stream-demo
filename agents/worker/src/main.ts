@@ -1,7 +1,7 @@
 import { createSdkMcpServer, query, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { fetchTaskRequest } from "@a2a-demo/protocol";
-import { connectBus } from "@a2a-demo/agents-common";
+import { connectBus, missingModelAuthEnv } from "@a2a-demo/agents-common";
 import { runWorker } from "./run.ts";
 import { makeProgressPublisher } from "./progress.ts";
 import { randomUUID } from "node:crypto";
@@ -12,10 +12,17 @@ const need = (k: string): string => {
   return v;
 };
 
+// Fail fast on model credentials (spec §5): an API key, or a complete Vertex
+// config when CLAUDE_CODE_USE_VERTEX=1 (the GKE overlay's path).
+const missingAuth = missingModelAuthEnv(process.env);
+if (missingAuth.length > 0) {
+  for (const k of missingAuth) console.error(`${k} is required`);
+  process.exit(1);
+}
+
 const taskId = need("TASK_ID");
 const session = need("SESSION");
 const natsUrl = need("NATS_URL");
-need("ANTHROPIC_API_KEY"); // fail fast (spec §5)
 const correlationId = process.env.CORRELATION_ID ?? `corr-${randomUUID()}`;
 const contextId = process.env.CONTEXT_ID ?? `ctx-${randomUUID()}`;
 const WORK_DIR = "/work";

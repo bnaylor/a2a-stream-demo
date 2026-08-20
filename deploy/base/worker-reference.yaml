@@ -12,14 +12,17 @@ metadata:
     # agents/chatops/src/k8s.ts workerPodManifest().
 spec:
   restartPolicy: Never
-  # No serviceAccountName — workers get no k8s API access (spec §4.2).
+  # The a2a-worker SA carries no Role/RoleBinding, so workers still get no k8s
+  # API access (spec §4.2). It is named only so GKE Workload Identity can bind
+  # a GSA to it; the token itself is never mounted.
+  serviceAccountName: a2a-worker
   automountServiceAccountToken: false
   securityContext:
     runAsNonRoot: true
     runAsUser: 1000
   containers:
     - name: worker
-      image: 10.3.10.52:5000/a2a-demo/worker:latest
+      image: a2a-demo/worker:latest
       imagePullPolicy: Always
       env:
         - name: TASK_ID
@@ -36,11 +39,14 @@ spec:
           value: "claude-sonnet-5"
         - name: WORKER_MAX_BUDGET_USD
           value: "1.50"
+        # On GKE, ChatOps also passes through CLAUDE_CODE_USE_VERTEX,
+        # CLOUD_ML_REGION and ANTHROPIC_VERTEX_PROJECT_ID from its own env.
         - name: ANTHROPIC_API_KEY
           valueFrom:
             secretKeyRef:
               name: a2a-demo-secrets
               key: ANTHROPIC_API_KEY
+              optional: true
       volumeMounts:
         # Scratch space for the worker (its cwd). emptyDir: nothing survives
         # the pod, and the worker's Write tool is scoped here.

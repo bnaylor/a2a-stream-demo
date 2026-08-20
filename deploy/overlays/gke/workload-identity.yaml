@@ -1,0 +1,24 @@
+# GKE Workload Identity: both KSAs impersonate the same GSA, which holds
+# roles/aiplatform.user in bnaylor-kagents-dev. Requires the WI pool
+# bnaylor-kagents-dev.svc.id.goog on the cluster and, per KSA, an IAM binding:
+#
+#   gcloud iam service-accounts add-iam-policy-binding \
+#     a2a-demo-agents@bnaylor-kagents-dev.iam.gserviceaccount.com \
+#     --role roles/iam.workloadIdentityUser \
+#     --member "serviceAccount:bnaylor-kagents-dev.svc.id.goog[a2a-demo/chatops]"
+#   ... and the same for [a2a-demo/a2a-worker].
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: chatops
+  namespace: a2a-demo
+  annotations:
+    iam.gke.io/gcp-service-account: a2a-demo-agents@bnaylor-kagents-dev.iam.gserviceaccount.com
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: a2a-worker
+  namespace: a2a-demo
+  annotations:
+    iam.gke.io/gcp-service-account: a2a-demo-agents@bnaylor-kagents-dev.iam.gserviceaccount.com

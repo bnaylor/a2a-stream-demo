@@ -7,6 +7,6 @@ node_modules
 .claude
 .superpowers
 docs
-pre-gke
+deploy
 scripts
 *.md

@@ -1,0 +1,36 @@
+# Base manifests for the A2A JetStream demo (spec §2).
+#
+# The base is environment-neutral: every Service is ClusterIP, no NodePorts,
+# and image references carry no registry prefix. Pick an overlay:
+#   kubectl apply -k deploy/overlays/local   # homelab microk8s
+#   kubectl apply -k deploy/overlays/gke     # GKE + Vertex
+#
+# worker-reference.yaml is intentionally NOT in resources below — it is a
+# reference shape only, not an applyable manifest.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: a2a-demo
+
+resources:
+  - 00-namespace.yaml
+  - nats-config.yaml
+  - nats-svc.yaml
+  - nats-ws-svc.yaml
+  - nats-client-svc.yaml
+  - nats-sts.yaml
+  - chatops-sa.yaml
+  - chatops-role.yaml
+  - chatops-rolebinding.yaml
+  - chatops-deploy.yaml
+  - worker-sa.yaml
+  - web-deploy.yaml
+  - web-svc.yaml
+  # worker-reference.yaml is intentionally NOT applied — it is the shape
+  # ChatOps uses to create worker pods programmatically (spec §4.2).
+
+# Lets `images:` in the overlays rewrite the chatops WORKER_IMAGE env var too.
+# Overlays inherit this.
+configurations:
+  - kustomizeconfig/images.yaml

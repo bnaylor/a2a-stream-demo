@@ -1,0 +1,29 @@
+# Homelab (microk8s) overlay — `kubectl apply -k deploy/overlays/local`.
+#
+# WARNING: apply only from a machine whose kubectl context is the microk8s
+# cluster. bnaylor's corp laptop defaults to a GKE context — check
+# `kubectl config current-context` first.
+#
+# Deltas from base: the in-cluster registry prefix, and the three NodePorts the
+# LAN reaches (MetalLB's pool 10.3.10.50–60 is nearly full, so NodePort, not
+# LoadBalancer — spec §2).
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: a2a-demo
+
+resources:
+  - ../../base
+
+images:
+  - name: a2a-demo/chatops
+    newName: 10.3.10.52:5000/a2a-demo/chatops
+  - name: a2a-demo/worker
+    newName: 10.3.10.52:5000/a2a-demo/worker
+  - name: a2a-demo/web
+    newName: 10.3.10.52:5000/a2a-demo/web
+
+patches:
+  # One multi-document strategic-merge patch: nats-client, nats-ws, web.
+  - path: nodeports.yaml

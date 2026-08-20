@@ -1,0 +1,25 @@
+# Route the Agent SDK at Vertex instead of the Anthropic API. Credentials come
+# from Workload Identity (see workload-identity.yaml) — there is no API key on
+# GKE, which is why the base marks the ANTHROPIC_API_KEY secretKeyRef optional.
+#
+# ChatOps passes these three through to every worker pod it creates
+# (agents/chatops/src/k8s.ts).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chatops
+  namespace: a2a-demo
+spec:
+  template:
+    spec:
+      containers:
+        - name: chatops
+          env:
+            - name: CLAUDE_CODE_USE_VERTEX
+              value: "1"
+            # Regional endpoint. Claude models are enabled in us-east5 for this
+            # project; the GKE cluster itself is in northamerica-northeast1.
+            - name: CLOUD_ML_REGION
+              value: "us-east5"
+            - name: ANTHROPIC_VERTEX_PROJECT_ID
+              value: "bnaylor-kagents-dev"
