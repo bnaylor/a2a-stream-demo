@@ -885,6 +885,72 @@ describe("reduce: worker tool activity", () => {
   });
 });
 
+/**
+ * Captured verbatim from the live GKE stream on 2026-08-20 (worker `raven`,
+ * A2A seqs 279-320) with a wire dump, not reconstructed from the mapper.
+ *
+ * The finding these pin: on that deployment EVERY thinking chunk is the bare
+ * marker with no content — all 74 of them across four sessions were byte-for-
+ * byte `"[thinking] "`. The API is in its redacted-thinking phase, where it
+ * "otherwise streams only pings" (claude-agent-sdk `SDKThinkingTokensMessage`
+ * doc), so `delta.thinking` is the empty string and the mapper faithfully
+ * emits a marker with nothing behind it.
+ *
+ * There is therefore no reasoning text on the wire for a twisty to show. These
+ * tests exist so that whatever is decided about enabling `thinking.display`,
+ * the reducer's behaviour on this input is deliberate rather than accidental.
+ */
+describe("reduce: the captured GKE wire (redacted thinking)", () => {
+  const CAPTURED_PINGS = 10;
+  const captured = (session: string) => {
+    const evs: BusEvent[] = [];
+    for (let i = 0; i < 4; i++) evs.push(ev(chunk(session, "[thinking] ")));
+    evs.push(ev(chunk(session, "[progress] Starting research on Ontario student insurance")));
+    for (let i = 0; i < CAPTURED_PINGS - 4; i++) evs.push(ev(chunk(session, "[thinking] ")));
+    evs.push(ev(chunk(session, "I")));
+    evs.push(ev(chunk(session, " have enough to compile a solid, practical answer now.")));
+    return evs;
+  };
+
+  it("opens no twisty, because not one ping carries any reasoning", () => {
+    const s = apply(initialState, ev(card("raven")), ...captured("raven"));
+    expect(s.chat.filter((c) => c.kind === "thinking")).toHaveLength(0);
+  });
+
+  it("never renders the bare marker as visible output", () => {
+    const s = apply(initialState, ev(card("raven")), ...captured("raven"));
+    for (const entry of s.chat) expect(entry.text).not.toContain("[thinking]");
+  });
+
+  it("keeps the milestone and the deliverable prose intact around the pings", () => {
+    const s = apply(initialState, ev(card("raven")), ...captured("raven"));
+    expect(s.chat.map((c) => c.kind)).toEqual(["progress", "delegate"]);
+    expect(s.chat[0].text).toBe("Starting research on Ontario student insurance");
+    // The pings between the two prose fragments must not have split the
+    // sentence — this is the merge that thinking entries are transparent to.
+    expect(s.chat[1].text).toBe("I have enough to compile a solid, practical answer now.");
+  });
+
+  // The same run with reasoning text present — what enabling
+  // `thinking: { display: 'summarized' }` would put on the wire. Kept beside
+  // the captured case so the difference is one line of input, not a mystery.
+  it("does open a twisty the moment a ping carries content", () => {
+    const s = apply(
+      initialState,
+      ev(card("raven")),
+      ev(chunk("raven", "[thinking] ")),
+      ev(chunk("raven", "[thinking] Weighing UHIP against")),
+      ev(chunk("raven", "[thinking]  the private plans")),
+      ev(chunk("raven", "I")),
+      ev(chunk("raven", " have enough now.")),
+    );
+    const twisties = s.chat.filter((c) => c.kind === "thinking");
+    expect(twisties).toHaveLength(1);
+    expect(twisties[0].latest).toBe("Weighing UHIP against the private plans");
+    expect(s.chat.filter((c) => c.kind === "delegate")[0].text).toBe("I have enough now.");
+  });
+});
+
 describe("reduce: the rail status line", () => {
   it("tracks the latest progress milestone while the worker runs", () => {
     const s = apply(

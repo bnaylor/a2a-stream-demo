@@ -566,3 +566,155 @@ labels.
   passed — both untouched
 - `kubectl kustomize` — `deploy/base` 13 objects, `overlays/local` 13,
   `overlays/gke` 14; `WORKER_MODEL` renders `claude-haiku-4-5`
+
+---
+
+# REGRESSION: "the twisty seems to have disappeared completely"
+
+Reported by bnaylor on the live GKE deploy, web image digest verified as the
+`9ebe537` build. Diagnosed against the real production stream, not the harness.
+
+## A. What the real wire actually contains
+
+Dumped the durable A2A stream off the cluster (`nats://127.0.0.1:14222`,
+`a2a.tasks.*.events`, `deliverAll`): **416 messages, 397 events**, covering four
+worker sessions — `koala`, `adder`, `raven` and ChatOps' own turns.
+
+**The empirical answer, and it is unambiguous:**
+
+```
+=== every DISTINCT thinking chunk payload on the entire stream ===
+  74 "[thinking] "
+```
+
+All **74** thinking chunks, across all four sessions, are byte-for-byte the
+bare marker with a trailing space and **zero content**. Verified at the raw
+envelope level, not through my 60-char truncation:
+
+```json
+{ "kind": "message-chunk", "from": { "session": "raven" },
+  "payload": { "parts": [ { "kind": "text", "text": "[thinking] " } ] } }
+```
+
+So, to the questions asked:
+
+- Do haiku worker chunks carry `[thinking] ` prefixes at all? **Yes — on every
+  thinking fragment, with the trailing space intact.** No prefix drift, no
+  missing space, no "only the first of a block".
+- Is there any reasoning text behind them? **No. Not one of the 74.**
+
+The reasoning prose arrives separately and *unmarked*, as ordinary `text_delta`
+(`"I"`, `" have enough to compile a solid, practical answer now."`).
+
+## B. Reproduction
+
+Fed the captured fragment sequence (`raven`, seqs 279-320) through the reducer
+as literals:
+
+```
+ENTRIES: [ { kind: "progress",  text: "Starting research on Ontario…" },
+           { kind: "delegate",  text: "I have enough to compile a solid…" } ]
+TWISTIES: 0
+```
+
+Exactly the reported screen: no twisty, prose inline.
+
+`FAKE_MODE=thinking` against the same head still produced twisties — so **the
+harness was lying**. It streamed thinking deltas carrying words; the API sends
+pings carrying nothing. That divergence is why this shipped.
+
+## C. Root cause
+
+`delta.thinking` is the **empty string** on every `thinking_delta`, because
+this deployment is in the API's *redacted-thinking phase*. The SDK says so
+outright (`claude-agent-sdk/sdk.d.ts:4895`, `SDKThinkingTokensMessage`):
+
+> Live thinking-token estimate, digested from `thinking_delta.estimated_tokens`
+> **during the redacted-thinking phase (where the API otherwise streams only
+> pings)**.
+
+The chain: API streams content-free thinking pings → `mapper.ts` checks
+`delta.thinking !== undefined` (an empty string passes) and emits
+`"[thinking] " + ""` → the UI receives a marker with nothing behind it.
+
+Both bug reports are the same underlying fact:
+
+| build | UI behaviour | what bnaylor saw |
+|---|---|---|
+| before `e60b505` | ping opens a twisty that can never fill | "the twisty, empty" (tweaks2) |
+| `e60b505` onwards | empty-block guard suppresses the ping | "the twisty disappeared completely" |
+
+So the *mechanism* of this regression is my empty-block guard (candidate 2),
+but the guard is not the disease. **There is no reasoning text on the wire for
+a twisty to show, on any build.** Reverting the guard would not restore the
+feature — it would restore the previous complaint. Candidate (3) is ruled out:
+`partitionThinking` handles the captured fragments correctly, and the
+sentence-splitting merge still works (test asserts `"I"` + `" have enough…"`
+lands as one entry).
+
+This is therefore **candidate (1)**, and per instruction I stopped rather than
+choosing.
+
+## D. Decision needed — options and costs
+
+Read from `sdk.d.ts`, not assumed. `query()` accepts
+`thinking?: ThinkingConfig`:
+
+```ts
+type ThinkingAdaptive = { type: 'adaptive';  display?: 'summarized' | 'omitted' };  // Opus 4.6+
+type ThinkingEnabled  = { type: 'enabled'; budgetTokens?: number;
+                          display?: 'summarized' | 'omitted' };                     // older models
+type ThinkingDisabled = { type: 'disabled' };
+```
+
+Neither agent currently sets any of this, so both run the session default.
+**Note the display modes: `'summarized'` or `'omitted'` only — there is no raw
+plaintext option.** The best obtainable is a summary, never the verbatim
+reasoning the twisty was originally designed around.
+
+**Option A — enable summarized thinking on the workers.**
+`thinking: { type: 'enabled', budgetTokens: N, display: 'summarized' }` in
+`agents/worker/src/main.ts`. Twisties fill with summary text.
+*Cost:* thinking tokens are billed and take wall-clock time before the first
+visible output — directly against the speed bnaylor just asked for, and the
+reason we moved off sonnet two commits ago. `adaptive` is documented as Opus
+4.6+, so haiku needs the explicit `enabled` form with a budget to pick.
+
+**Option B — accept no worker twisties on haiku.** Workers show progress
+milestones, tool activity and prose; no twisty. ChatOps would twisty only if it
+runs a model/config that streams summaries — on the captured wire it does not,
+so today this means **no twisties anywhere**, and the feature is dormant until
+a model change.
+*Cost:* zero latency, zero spend; a built feature sits unused.
+
+**Option C — enable it on ChatOps only.** ChatOps turns are short, so the
+latency cost lands where it is least visible, and the twisty stays demonstrable
+while workers stay fast.
+*Cost:* small ChatOps latency; workers still have no twisty.
+
+My read, for what it is worth: **C** keeps the feature visible at the lowest
+speed cost, but this is a product call and I have not implemented any of them.
+
+## What was done in this pass
+
+No UI behaviour change — **the built bundle hash is identical to `9ebe537`'s**
+(`index-wLSIMg-O.js`), which is the check that I did not quietly pick an option.
+
+1. **Fixed the harness**, which is what let this ship. `FAKE_MODE` default is
+   now `pings`, reproducing the captured wire exactly: content-free thinking
+   pings interleaved with tool calls, progress pairs and unmarked prose. It now
+   shows `twisties: []` locally, matching GKE. The content-bearing mode is kept
+   as `FAKE_MODE=summarized` and documented as *hypothetical — represents no
+   current deployment*.
+2. **Pinned the captured wire in tests** (4 new), including the exact
+   `raven` sequence, so whichever option is chosen the behaviour is deliberate.
+   One test sits beside them showing the same run *with* content, so the
+   difference is one line of input rather than a mystery.
+3. Throwaway wire-dump scripts were used and removed.
+
+## Verification
+
+- `npm run -w web test` — **238 passed** (234 → 238)
+- `npm run typecheck` / `typecheck:web` — clean
+- `npm run -w web build` — green, bundle byte-identical to `9ebe537`
+- `npm test` (root) 55 / 4 skipped, `npx vitest run agents/` 37 — untouched
