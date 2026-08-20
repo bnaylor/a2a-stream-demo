@@ -23,28 +23,46 @@ without auth; that is accepted for this demo.
 ## 2. Environment and deployment
 
 - **Cluster:** bnaylor's homelab microk8s cluster (runs production-ish
-  workloads — treat as shared infrastructure).
+  workloads — treat as shared infrastructure). Verified layout: 3 nodes
+  (`dusty` 10.3.10.4, `lucky` 10.3.10.2, `ned` 10.3.10.3), containerd,
+  v1.35.x. There is **no GKE** in play for this demo — GKE is the
+  later overlay only.
 - **Isolation rules:** everything lives in namespace `a2a-demo`. No
   cluster-scoped resources of any kind. Every pod has CPU/memory
   requests and limits. Nothing references or depends on workloads
   outside the namespace.
 - **NATS:** we deploy our own single-node NATS inside `a2a-demo`
   (hand-written StatefulSet + ConfigMap + Services, not Helm), with
-  JetStream enabled (file storage on a small PVC, ~1Gi) and the native
-  WebSocket listener enabled. The cluster's existing NATS install is
-  ignored entirely. This keeps the manifests able to stand up a fresh
-  GKE cluster with no pre-existing NATS.
-- **Images:** Claude provides Dockerfiles in this repo; bnaylor's local
-  agent builds them on a local box and pushes to the in-cluster
-  container registry. Image references are parameterized via the
+  JetStream enabled (file storage on a small PVC, ~1Gi). The NATS
+  ConfigMap **must** include an explicit WebSocket listener block
+  (`websocket { port: 9222 }` or similar) — the cluster's existing
+  `nats` install (10.3.10.55:4222) has **no** WebSocket listener, and
+  the browser UI depends on WS. The existing NATS is ignored entirely
+  (it is shared, prod-ish infrastructure; changing it is a separate
+  scromp-sign-off). A fresh `a2a-demo` namespace has no NATS dependency.
+- **Images:** the local agent (rune) builds images on the homelab build
+  box and pushes to the **in-cluster registry at `10.3.10.52:5000`**
+  (a.k.a. `registry.naylo.rs`), which is plain HTTP/insecure — Docker's
+  `insecure-registries` already lists `10.3.10.52:5000` on the build
+  box, and every existing cluster image already pulls
+  `10.3.10.52:5000/...`. Image references are parameterized via the
   kustomize `images:` transformer with default prefix
-  `localhost:32000/a2a-demo/` (adjust to the registry's actual address
-  in the local overlay).
+  **`10.3.10.52:5000/a2a-demo/`** — use the IP form, not DNS, since
+  the nodes' containerd is already configured to pull that IP
+  insecurely. (The microk8s built-in registry `localhost:32000` is
+  **not** enabled on this cluster — do not use it.)
 - **Layout:** `deploy/base` + `deploy/overlays/local` (microk8s: registry
   prefix, NodePorts) and `deploy/overlays/gke` (written later; swaps
-  image refs, ingress, and eventually Vertex auth).
+  image refs, ingress, and eventually Vertex auth). Until the GKE work
+  happens, the local manifests + any iterated fixes live under a
+  throwaway `pre-gke/` directory committed to this repo (no secrets) so
+  rune and scromp can iterate and transfer files without manual scp.
 - **LAN access:** two NodePort services — one for the static web UI, one
-  for the NATS WebSocket port — so a browser on the LAN reaches both.
+  for the NATS WebSocket port — so a browser on the LAN reaches both at
+  `http://10.3.10.<node>:<NodePort>` / `ws://10.3.10.<node>:<NodePort>`.
+  NodePort (not LoadBalancer) is deliberate: the MetalLB pool
+  (`10.3.10.50–60`) is nearly full — only `.60` is free. The concrete
+  node IP + NodePort are pinned in the `local` overlay.
 - **Model auth:** personal `ANTHROPIC_API_KEY` in a k8s Secret
   (created out-of-band, never committed), mounted into ChatOps and
   worker pods. Vertex via Workload Identity is the GKE-overlay follow-up.
@@ -180,7 +198,9 @@ Same base image, different entrypoint.
 
 Static single-page app; the "server" is only a static file host
 (nginx). The browser connects **directly to NATS via WebSocket** using
-nats.ws and is just another protocol participant:
+nats.ws and is just another protocol participant. The WS URL is the
+**node-IP + NodePort** form (`ws://10.3.10.<node>:<NodePort>`), never
+`localhost` — the browser sits on the LAN, not in the cluster:
 
 - **Chat pane:** sends chat turns as A2A tasks to the chatops session;
   renders streamed chunks. Delegate output is interleaved, prefixed
