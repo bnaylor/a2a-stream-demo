@@ -411,3 +411,81 @@ still clears to `closed`.
 - `npm run -w web build` — green
 - `kubectl kustomize` on `deploy/base` (13 objects), `overlays/local` (13),
   `overlays/gke` (14) — all render; model env resolves to `claude-haiku-4-5`
+
+---
+
+# tweaks2 follow-up — worker tool activity in chat
+
+## Ruling received
+
+Mapper wire semantics stay as-is: with haiku workers the `text_delta` stream
+**is** the deliverable (the interleaving beat from M2), so routing it into a
+twisty would hide the feature. No change to `agents/common/src/mapper.ts`. The
+"reasoning as plain entries" half of symptom 2b is therefore closed as
+documented behaviour, not a defect.
+
+## What this adds
+
+The other half of the "chat silent while the rail pulses" complaint: the
+tool-use phase. A `tool_use` block maps to a bare non-final `working`
+status-update (`metadata: { tool: name }`), which pulsed the rail and put
+nothing in the transcript — so a run that was mostly WebFetch looked frozen
+next to a busy bus.
+
+Those now become dim `progress` entries: `using WebSearch…`, session-attributed
+like other delegate traffic and rendered in the existing hourglass style.
+
+Consecutive **identical** lines from the same session collapse into one — a
+research worker fires the same tool repeatedly and six identical rows say
+nothing that one does — but a *different* tool starts a new row, so the
+sequence of what the worker is doing still reads. Thinking entries are skipped
+when deciding what counts as consecutive, the same rule `appendChunk` uses,
+since twisties are pinned and updated in place rather than appended.
+
+Untouched: terminal/final statuses (never narrated), `report_progress`
+milestones (they carry `metadata.progress`, not `metadata.tool`), the rail's
+status line (a tool beat is not a milestone and must not claim the tap), and
+ChatOps' own tool use (it narrates that in words already).
+
+**Note on "session-attributed":** the entry carries `session`, which scopes the
+collapse so two concurrent workers never merge into each other. The visible row
+keeps the existing progress styling with no `[session]` prefix, matching
+`report_progress` lines — adding a prefix would have changed how every existing
+progress line renders, which was outside this ask. Say the word if the prefix
+is wanted on both.
+
+## Live check
+
+`FAKE_MODE=prose`, the previously-dead stretch between delegation and the
+worker's prose:
+
+```
+t=3.2s  ⏳Starting research: what's a good place for brunch in Toronto…
+        ⏳using WebSearch…
+        ⏳using WebFetch…
+        ⏳using WebSearch…
+        ⏳using WebFetch…
+        ⏳using Read…
+t=5.6s  ⏳using WebFetch…
+        ⏳Fetched 2 of 4 sources
+        [otter] Let me think about what the user actually wants here…
+```
+
+## Mutation check
+
+| mutation | result |
+|---|---|
+| never collapse repeats | 3 failed |
+| collapse on session alone, ignoring which tool | 1 failed |
+| narrate terminal statuses too | 1 failed |
+| mistake `metadata.progress` for a tool | 1 failed |
+| narrate ChatOps' tool use too | 1 failed |
+| ignore thinking when finding the previous line | 1 failed |
+
+## Verification
+
+- `npm run -w web test` — **224 passed** (213 → 224, 11 new)
+- `npm run typecheck:web` — clean
+- `npm run -w web build` — green
+- `npm test` (root) — 55 passed / 4 skipped, untouched
+- `npx vitest run agents/` — 37 passed, untouched

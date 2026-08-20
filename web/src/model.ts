@@ -303,6 +303,44 @@ function latestLine(lines: readonly string[]): string {
   return "";
 }
 
+/**
+ * The tool name the mapper hangs off a `tool_use` beat
+ * (`agents/common/src/mapper.ts`: `metadata: { tool: name }` on a non-final
+ * `working` status-update). `report_progress` carries `metadata.progress`
+ * instead, so the two never collide.
+ */
+function toolOf(payload: unknown): string | undefined {
+  const tool = (payload as { metadata?: { tool?: unknown } }).metadata?.tool;
+  return typeof tool === "string" && tool !== "" ? tool : undefined;
+}
+
+/** How a tool beat reads in the transcript. */
+function toolNote(tool: string): string {
+  return `using ${tool}…`;
+}
+
+/**
+ * A tool beat, unless it would repeat the line already at the bottom.
+ *
+ * A research worker fires the same tool many times in a row; six identical
+ * "using WebSearch…" lines say nothing that one does. Consecutive *identical*
+ * lines from the same session collapse, but a different tool starts a new line,
+ * so the sequence of what the worker is doing still reads. Thinking entries are
+ * skipped when deciding what is "consecutive", exactly as in `appendChunk` —
+ * they are pinned and updated in place, not appended.
+ */
+function appendToolNote(state: UiState, entry: Omit<ChatEntry, "id">): ChatEntry[] {
+  let at = state.chat.length - 1;
+  while (at >= 0 && state.chat[at].kind === "thinking") at--;
+  const last = at >= 0 ? state.chat[at] : undefined;
+  const repeat =
+    last !== undefined &&
+    last.kind === "progress" &&
+    last.session === entry.session &&
+    last.text === entry.text;
+  return repeat ? state.chat : pushChat(state, entry);
+}
+
 /** Index of this agent-task's twisty, or -1 before it has one. */
 function thinkingIndex(chat: readonly ChatEntry[], session: string, taskId?: string): number {
   return chat.findIndex(
@@ -471,6 +509,20 @@ function reduceEnvelope(state: UiState, env: Envelope, live: boolean): UiState {
       const state_ = payload.status?.state ?? "working";
       next.tasks = upsertTask(state.tasks, env, { state: state_ });
       const terminal = payload.final === true || TERMINAL.includes(state_);
+      // A worker reaching for a tool is the one part of a long run that
+      // otherwise reached the rail and nothing else: minutes of WebFetch look
+      // like a frozen transcript next to a busy bus. ChatOps is excluded — it
+      // narrates its own tool use in words.
+      const tool = terminal ? undefined : toolOf(env.payload);
+      if (tool !== undefined && session !== CHATOPS_SESSION) {
+        next.chat = appendToolNote(state, {
+          kind: "progress",
+          session,
+          text: toolNote(tool),
+          correlationId: env.correlationId,
+          taskId: env.taskId,
+        });
+      }
       // ChatOps finalises a status-update per chat turn but outlives all of
       // them, so only per-task agents (the workers) retire on a terminal state.
       if (terminal && session !== CHATOPS_SESSION) {

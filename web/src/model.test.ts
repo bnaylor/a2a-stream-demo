@@ -666,6 +666,164 @@ describe("reduce: real mapper delta shapes", () => {
   });
 });
 
+/**
+ * A worker's tool calls used to reach the rail and nothing else, so a run that
+ * was mostly WebFetch looked like a frozen transcript beside a busy bus.
+ *
+ * Shape per `agents/common/src/mapper.ts` (source of truth, deliberately not
+ * imported): a `tool_use` block becomes a NON-final `working` status-update
+ * carrying `metadata: { tool: name }`.
+ */
+describe("reduce: worker tool activity", () => {
+  function toolStatus(session: string, tool: string, taskId = TASK): Envelope {
+    return makeEnvelope({
+      kind: "status-update",
+      correlationId: CORR,
+      taskId,
+      contextId: CTX,
+      from: { session, agentType: "claude-code" },
+      payload: {
+        taskId,
+        contextId: CTX,
+        final: false,
+        status: { state: "working", timestamp: "2026-08-20T00:00:01.000Z" },
+        metadata: { tool },
+      },
+    });
+  }
+
+  it("turns a tool status-update into a dim progress line", () => {
+    const s = apply(initialState, ev(card("otter")), ev(toolStatus("otter", "WebSearch")));
+    expect(s.chat).toHaveLength(1);
+    expect(s.chat[0]).toMatchObject({
+      kind: "progress",
+      session: "otter",
+      text: "using WebSearch…",
+      correlationId: CORR,
+      taskId: TASK,
+    });
+  });
+
+  it("collapses a run of the same tool into one line", () => {
+    const s = apply(
+      initialState,
+      ev(toolStatus("otter", "WebSearch")),
+      ev(toolStatus("otter", "WebSearch")),
+      ev(toolStatus("otter", "WebSearch")),
+    );
+    expect(s.chat).toHaveLength(1);
+    expect(s.chat[0].text).toBe("using WebSearch…");
+  });
+
+  it("starts a new line when the tool changes, so the sequence still reads", () => {
+    const s = apply(
+      initialState,
+      ev(toolStatus("otter", "WebSearch")),
+      ev(toolStatus("otter", "WebSearch")),
+      ev(toolStatus("otter", "WebFetch")),
+      ev(toolStatus("otter", "WebSearch")),
+    );
+    expect(s.chat.map((c) => c.text)).toEqual([
+      "using WebSearch…",
+      "using WebFetch…",
+      "using WebSearch…",
+    ]);
+  });
+
+  it("keeps two workers' tool lines apart", () => {
+    const s = apply(
+      initialState,
+      ev(toolStatus("otter", "WebSearch", "t1")),
+      ev(toolStatus("lynx", "WebSearch", "t2")),
+    );
+    expect(s.chat).toHaveLength(2);
+    expect(s.chat.map((c) => c.session)).toEqual(["otter", "lynx"]);
+  });
+
+  it("sees through a twisty when deciding what is consecutive", () => {
+    const s = apply(
+      initialState,
+      ev(toolStatus("otter", "WebSearch")),
+      ev(chunk("otter", "[thinking] weighing the sources")),
+      ev(toolStatus("otter", "WebSearch")),
+    );
+    expect(s.chat.filter((c) => c.kind === "progress")).toHaveLength(1);
+  });
+
+  it("leaves an ordinary status-update alone", () => {
+    const s = apply(initialState, ev(card("otter")), ev(status("otter", "working", false)));
+    expect(s.chat).toHaveLength(0);
+  });
+
+  it("says nothing for a terminal status, however it is marked", () => {
+    const final = apply(initialState, ev(card("otter")), ev(toolStatusFinal("otter")));
+    expect(final.chat).toHaveLength(0);
+    expect(final.agents.get("otter")?.status).toBe("done");
+  });
+
+  function toolStatusFinal(session: string): Envelope {
+    return makeEnvelope({
+      kind: "status-update",
+      correlationId: CORR,
+      taskId: TASK,
+      contextId: CTX,
+      from: { session, agentType: "claude-code" },
+      payload: {
+        taskId: TASK,
+        contextId: CTX,
+        final: true,
+        status: { state: "completed", timestamp: "2026-08-20T00:00:02.000Z" },
+        metadata: { tool: "WebSearch" },
+      },
+    });
+  }
+
+  it("does not narrate chatops' own tool use", () => {
+    const s = apply(initialState, ev(card("chatops")), ev(toolStatus("chatops", "delegate_task")));
+    expect(s.chat).toHaveLength(0);
+  });
+
+  // report_progress publishes metadata.progress, not metadata.tool.
+  it("leaves report_progress milestones untouched", () => {
+    const s = apply(
+      initialState,
+      ev(card("otter")),
+      ev(chunk("otter", "[progress] fetching spec 2/2")),
+      ev(progressStatus("otter", "fetching spec 2/2")),
+    );
+    expect(s.chat).toHaveLength(1);
+    expect(s.chat[0]).toMatchObject({ kind: "progress", text: "fetching spec 2/2" });
+    expect(s.agents.get("otter")?.statusLine).toBe("fetching spec 2/2");
+  });
+
+  function progressStatus(session: string, note: string): Envelope {
+    return makeEnvelope({
+      kind: "status-update",
+      correlationId: CORR,
+      taskId: TASK,
+      contextId: CTX,
+      from: { session, agentType: "claude-code" },
+      payload: {
+        taskId: TASK,
+        contextId: CTX,
+        final: false,
+        status: { state: "working", timestamp: "2026-08-20T00:00:01.000Z" },
+        metadata: { progress: note },
+      },
+    });
+  }
+
+  it("does not let a tool line become the tap's status line", () => {
+    const s = apply(initialState, ev(card("otter")), ev(toolStatus("otter", "WebSearch")));
+    expect(s.agents.get("otter")?.statusLine).toBeUndefined();
+  });
+
+  it("still advances the task state", () => {
+    const s = apply(initialState, ev(card("otter")), ev(toolStatus("otter", "WebSearch")));
+    expect(s.tasks.get(TASK)?.state).toBe("working");
+  });
+});
+
 describe("reduce: the rail status line", () => {
   it("tracks the latest progress milestone while the worker runs", () => {
     const s = apply(
