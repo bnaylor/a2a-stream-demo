@@ -1,13 +1,10 @@
 import { useEffect, useReducer, useRef } from "react";
 import { reduce, initialState } from "./model";
 import { startBus, type BusHandle } from "./bus";
+import { wsUrl } from "./config";
 import Chat from "./Chat";
-
-function wsUrl(): string {
-  const protocol = globalThis.location?.protocol === "https:" ? "wss:" : "ws:";
-  const host = globalThis.location?.host ?? "localhost:4223";
-  return `${protocol}//${host}/bus`;
-}
+import Rail from "./Rail";
+import "./styles.css";
 
 export default function App() {
   const [state, dispatch] = useReducer(reduce, initialState);
@@ -46,27 +43,11 @@ export default function App() {
   };
 
   return (
-    <div style={{ width: "100%", height: "100vh", display: "flex", flexDirection: "column" }}>
-      <div
-        style={{
-          flex: "0 0 45%",
-          borderBottom: "1px solid #ccc",
-          padding: "16px",
-          overflow: "auto",
-        }}
-      >
-        <h2>Topology</h2>
-        <p>a2a demo - topology zone</p>
+    <div className="app">
+      <div className="app-topology">
+        <Rail state={state} />
       </div>
-      <div
-        style={{
-          flex: "0 0 55%",
-          padding: "16px",
-          overflow: "auto",
-          display: "flex",
-          flexDirection: "column",
-        }}
-      >
+      <div className="app-chat">
         <Chat entries={state.chat} onPublishChat={handlePublishChat} />
       </div>
     </div>

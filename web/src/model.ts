@@ -78,8 +78,12 @@ export interface UiState {
 
 export type BusEvent =
   | { type: "envelope"; env: Envelope; live: boolean }
-  | { type: "heartbeat"; session: string; at: number }
+  /** `agentType` comes off the heartbeat subject; absent only for malformed ones. */
+  | { type: "heartbeat"; session: string; agentType?: string; at: number }
   | { type: "tick"; now: number };
+
+/** Stand-in agentType for a pod we have only ever heard heartbeat from. */
+export const UNKNOWN_AGENT_TYPE = "unknown";
 
 export const initialState: UiState = {
   agents: new Map(),
@@ -302,10 +306,21 @@ export function reduce(state: UiState, event: BusEvent): UiState {
       return reduceEnvelope(state, event.env, event.live);
 
     case "heartbeat": {
-      // A heartbeat for a session we have no card for is dropped: the card is
-      // on the replayed stream, so it will arrive (or the pod is a stranger).
       const prev = state.agents.get(event.session);
-      if (!prev) return state;
+      // A heartbeat with no card behind it still means a live pod: the card is
+      // published once and may predate this browser, or the pod may have
+      // restarted mid-stream. Surface a minimal agent rather than lose it; a
+      // later card fills in the details.
+      if (!prev) {
+        const agents = new Map(state.agents);
+        agents.set(event.session, {
+          session: event.session,
+          agentType: event.agentType ?? UNKNOWN_AGENT_TYPE,
+          status: "live",
+          lastHeartbeat: event.at,
+        });
+        return { ...state, agents };
+      }
       const status: AgentStatus = prev.status === "stale" ? "live" : prev.status;
       return { ...state, agents: withAgent(state.agents, event.session, { lastHeartbeat: event.at, status }) };
     }

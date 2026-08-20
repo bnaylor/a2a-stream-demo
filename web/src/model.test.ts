@@ -138,9 +138,52 @@ describe("reduce: agent lifecycle", () => {
     expect(s.agents.get("otter")?.lastHeartbeat).toBe(5_000);
   });
 
-  it("ignores heartbeats for sessions with no agent-card yet", () => {
+  // A heartbeat can beat its own card onto the stream (the card is published
+  // once, the heartbeat every few seconds), and a worker that restarts after
+  // the browser connected may never re-publish one. The pod is alive and
+  // shouting either way, so the rail shows it.
+  it("creates a minimal live agent for a heartbeat with no card yet", () => {
+    const s = apply(initialState, {
+      type: "heartbeat",
+      session: "ghost",
+      agentType: "claude-code",
+      at: 5_000,
+    });
+    expect(s.agents.get("ghost")).toEqual({
+      session: "ghost",
+      agentType: "claude-code",
+      status: "live",
+      lastHeartbeat: 5_000,
+    });
+  });
+
+  it("falls back to an unknown agentType when the heartbeat carries none", () => {
     const s = apply(initialState, { type: "heartbeat", session: "ghost", at: 5_000 });
-    expect(s.agents.size).toBe(0);
+    expect(s.agents.get("ghost")).toMatchObject({ agentType: "unknown", status: "live" });
+  });
+
+  it("upgrades a heartbeat-only agent when its card finally lands", () => {
+    const s = apply(
+      initialState,
+      { type: "heartbeat", session: "otter", agentType: "unknown", at: 5_000 },
+      ev(card("otter", "claude-code")),
+    );
+    expect(s.agents.size).toBe(1);
+    expect(s.agents.get("otter")).toMatchObject({
+      agentType: "claude-code",
+      status: "live",
+      lastHeartbeat: 5_000,
+    });
+  });
+
+  it("does not revive a closed agent on a late heartbeat", () => {
+    const s = apply(
+      initialState,
+      ev(card("otter")),
+      ev(closed("otter")),
+      { type: "heartbeat", session: "otter", at: 9_000 },
+    );
+    expect(s.agents.get("otter")?.status).toBe("closed");
   });
 });
 
@@ -240,6 +283,21 @@ describe("reduce: chat entries", () => {
       text: "fetching spec 2/2",
     });
     expect(s.agents.get("otter")?.statusLine).toBe("fetching spec 2/2");
+  });
+
+  it("sets the statusLine on a heartbeat-only agent that has no card yet", () => {
+    const s = apply(
+      initialState,
+      { type: "heartbeat", session: "otter", agentType: "claude-code", at: 1_000 },
+      ev(chunk("otter", "[progress] fetching spec 2/2")),
+    );
+    expect(s.agents.get("otter")?.statusLine).toBe("fetching spec 2/2");
+  });
+
+  it("still drops the statusLine when nothing has announced the agent", () => {
+    const s = apply(initialState, ev(chunk("otter", "[progress] fetching spec 2/2")));
+    expect(s.agents.size).toBe(0);
+    expect(s.chat[0]).toMatchObject({ kind: "progress", text: "fetching spec 2/2" });
   });
 
   it("keeps consecutive progress notes as separate entries", () => {

@@ -28,16 +28,25 @@ export interface BusHandle {
   close(): Promise<void>;
 }
 
-/** `agents.hb.{agentType}.{owner}.{session}` */
-function sessionFromHeartbeat(subject: string, data: Uint8Array): string | null {
+/**
+ * `agents.hb.{agentType}.{owner}.{session}` — the subject alone identifies the
+ * pod, so a heartbeat is useful even when its body is unreadable.
+ */
+function agentFromHeartbeat(
+  subject: string,
+  data: Uint8Array,
+): { session: string; agentType?: string } | null {
+  const parts = subject.split(".");
+  const agentType = parts.length === 5 ? parts[2] : undefined;
   try {
     const payload = JSON.parse(new TextDecoder().decode(data)) as { session?: string };
-    if (typeof payload.session === "string" && payload.session !== "") return payload.session;
+    if (typeof payload.session === "string" && payload.session !== "") {
+      return { session: payload.session, agentType };
+    }
   } catch {
     // fall through to the subject, which carries the same name
   }
-  const parts = subject.split(".");
-  return parts.length === 5 ? parts[4] : null;
+  return parts.length === 5 ? { session: parts[4], agentType } : null;
 }
 
 export async function startBus(
@@ -79,10 +88,10 @@ export async function startBus(
   const heartbeats: Subscription = nc.subscribe(HEARTBEAT_SUBJECT, {
     callback: (err, m) => {
       if (err) return;
-      const session = sessionFromHeartbeat(m.subject, m.data);
+      const agent = agentFromHeartbeat(m.subject, m.data);
       // Local clock, not the payload's: staleness is measured against the
       // browser's own `tick`, and the two clocks may disagree.
-      if (session) dispatch({ type: "heartbeat", session, at: Date.now() });
+      if (agent) dispatch({ type: "heartbeat", ...agent, at: Date.now() });
     },
   });
 
