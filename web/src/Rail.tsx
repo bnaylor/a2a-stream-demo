@@ -131,7 +131,6 @@ export default function Rail({ state }: { state: UiState }) {
   const heartbeatsRef = useRef(new Map<string, number>());
   const closedAtRef = useRef(new Map<string, number>());
   const rafRef = useRef<number | null>(null);
-  const ghostActiveRef = useRef(false);
 
   // --- measure ---------------------------------------------------------------
   useEffect(() => {
@@ -185,8 +184,10 @@ export default function Rail({ state }: { state: UiState }) {
       const now = performance.now();
       flightsRef.current = flightsRef.current.filter((f) => now - f.start < PULSE_MS);
       ripplesRef.current = ripplesRef.current.filter((r) => now - r.start < RIPPLE_MS);
-      const busy =
-        flightsRef.current.length > 0 || ripplesRef.current.length > 0 || ghostActiveRef.current;
+      // Only ever runs while something is actually moving. A ghost replay is a
+      // chain of setTimeouts, so the loop parks itself between steps and each
+      // `launch` wakes it again.
+      const busy = flightsRef.current.length > 0 || ripplesRef.current.length > 0;
       rafRef.current = busy ? requestAnimationFrame(step) : null;
       paint();
     };
@@ -269,11 +270,7 @@ export default function Rail({ state }: { state: UiState }) {
   );
 
   useEffect(() => {
-    if (!ghost) {
-      ghostActiveRef.current = false;
-      return;
-    }
-    ghostActiveRef.current = true;
+    if (!ghost) return;
     if (ghost.index >= ghost.steps.length - 1) {
       const done = setTimeout(() => setGhost(null), PULSE_MS + 300);
       return () => clearTimeout(done);
@@ -314,13 +311,16 @@ export default function Rail({ state }: { state: UiState }) {
         <span className="rail-subject">a2a.&gt;</span>
       </div>
 
+      {/* role="group", never "img": the taps inside are real buttons, and an
+          img role would flatten them out of the accessibility tree while
+          leaving them tab-focusable. */}
       <svg
         className="rail-svg"
         width={width}
         height={SVG_HEIGHT}
         viewBox={`0 0 ${width} ${SVG_HEIGHT}`}
-        role="img"
-        aria-label={`Bus rail with ${taps.length} taps`}
+        role="group"
+        aria-label="NATS bus topology"
       >
         <defs>
           <filter id="rail-glow" x="-60%" y="-400%" width="220%" height="900%">
