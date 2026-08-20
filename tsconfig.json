@@ -9,5 +9,5 @@
     "allowImportingTsExtensions": true,
     "types": ["node"]
   },
-  "include": ["protocol/src", "scripts"]
+  "include": ["protocol/src", "agents/*/src", "scripts"]
 }

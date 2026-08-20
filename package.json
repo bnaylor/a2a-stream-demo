@@ -2,7 +2,7 @@
   "name": "a2a-stream-demo",
   "private": true,
   "type": "module",
-  "workspaces": ["protocol"],
+  "workspaces": ["protocol", "agents/*"],
   "scripts": {
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit",
