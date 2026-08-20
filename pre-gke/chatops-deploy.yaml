@@ -43,6 +43,9 @@ spec:
             # Worker model (haiku for cost-efficient task execution).
             - name: WORKER_MODEL
               value: "claude-haiku-4-5"
+            # Worker max budget (USD per task).
+            - name: WORKER_MAX_BUDGET_USD
+              value: "0.50"
             # Namespace for worker pods (inject from metadata).
             - name: NAMESPACE
               valueFrom:

@@ -31,6 +31,7 @@ const model = process.env.CHATOPS_MODEL ?? "claude-sonnet-5";
 const namespace = process.env.NAMESPACE ?? "a2a-demo";
 const secretName = process.env.SECRET_NAME ?? "a2a-demo-secrets";
 const workerModel = process.env.WORKER_MODEL;
+const workerMaxBudgetUsd = process.env.WORKER_MAX_BUDGET_USD ?? "0.50";
 const OWN_SESSION = "chatops";
 const SWEEP_INTERVAL_MS = 60_000;
 
@@ -104,6 +105,7 @@ handle = await startChatOps({
     natsUrl,
     secretName,
     workerModel,
+    workerMaxBudgetUsd,
   }),
   watchInbox: (cb) => watchTaskRequests(bus.nc, OWN_SESSION, cb),
   publishEvent: (taskId, env) => bus.publishEvent(taskId, env),

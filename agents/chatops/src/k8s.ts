@@ -26,6 +26,8 @@ export interface K8sConfig {
   secretName: string;
   /** Passed through to the worker as WORKER_MODEL when set. */
   workerModel?: string;
+  /** Passed through to the worker as WORKER_MAX_BUDGET_USD when set. */
+  workerMaxBudgetUsd?: string;
 }
 
 export const WORKER_APP_LABEL = "a2a-worker";
@@ -53,6 +55,9 @@ export function workerPodManifest(cfg: K8sConfig, spec: WorkerPodSpec): V1Pod {
   ];
   if (cfg.workerModel) {
     env.push({ name: "WORKER_MODEL", value: cfg.workerModel });
+  }
+  if (cfg.workerMaxBudgetUsd) {
+    env.push({ name: "WORKER_MAX_BUDGET_USD", value: cfg.workerMaxBudgetUsd });
   }
 
   return {

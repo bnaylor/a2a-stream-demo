@@ -34,7 +34,7 @@ spec:
         - name: WORKER_MODEL
           value: "claude-haiku-4-5"
         - name: WORKER_MAX_BUDGET_USD
-          value: "5"
+          value: "0.50"
         - name: ANTHROPIC_API_KEY
           valueFrom:
             secretKeyRef:
