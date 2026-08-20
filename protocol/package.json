@@ -1,0 +1,10 @@
+{
+  "name": "@a2a-demo/protocol",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "dependencies": {
+    "nats": "^2.29.0"
+  }
+}
