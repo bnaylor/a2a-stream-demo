@@ -49,6 +49,32 @@ describe("thinkingConfig", () => {
   });
 });
 
+// Pins the deployed pairing: ChatOps holds the conversation on sonnet, the
+// worker pods grind on haiku. The two get different thinking shapes for that
+// reason, and neither should drift without this failing.
+describe("the deployed model split", () => {
+  const CHATOPS = "claude-sonnet-5";
+  const WORKER = "claude-haiku-4-5";
+
+  it("lets ChatOps' sonnet choose its own depth", () => {
+    expect(thinkingConfig(CHATOPS)).toEqual({ type: "adaptive", display: "summarized" });
+  });
+
+  it("pins the worker's haiku to an explicit budget", () => {
+    expect(thinkingConfig(WORKER, 2048)).toEqual({
+      type: "enabled",
+      budgetTokens: 2048,
+      display: "summarized",
+    });
+  });
+
+  it("asks both of them for summaries, which is the point", () => {
+    for (const model of [CHATOPS, WORKER]) {
+      expect(thinkingConfig(model)).toHaveProperty("display", "summarized");
+    }
+  });
+});
+
 describe("supportsAdaptiveThinking", () => {
   it("recognises the families the SDK documents as adaptive", () => {
     for (const m of ["claude-opus-4-6", "claude-opus-4-7", "claude-sonnet-5", "claude-fable-5"]) {

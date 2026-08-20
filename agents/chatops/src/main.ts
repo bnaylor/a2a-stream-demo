@@ -34,7 +34,10 @@ if (missingAuth.length > 0) {
 
 const natsUrl = need("NATS_URL");
 const workerImage = need("WORKER_IMAGE");
-const model = process.env.CHATOPS_MODEL ?? "claude-haiku-4-5";
+// ChatOps stays on sonnet: it is the one agent in the conversation with the
+// user, and it routes rather than grinds. Only the worker pods dropped to
+// haiku, where the long research jobs are.
+const model = process.env.CHATOPS_MODEL ?? "claude-sonnet-5";
 const namespace = process.env.NAMESPACE ?? "a2a-demo";
 const secretName = process.env.SECRET_NAME ?? "a2a-demo-secrets";
 const workerModel = process.env.WORKER_MODEL ?? "claude-haiku-4-5";

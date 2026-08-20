@@ -41,9 +41,11 @@ spec:
                   name: a2a-demo-secrets
                   key: ANTHROPIC_API_KEY
                   optional: true
-            # ChatOps model (defaults to claude-haiku-4-5 if not set).
+            # ChatOps model (defaults to claude-sonnet-5 if not set). Only the
+            # worker pods dropped to haiku; ChatOps holds the conversation and
+            # routes, so it keeps the stronger model.
             - name: CHATOPS_MODEL
-              value: "claude-haiku-4-5"
+              value: "claude-sonnet-5"
             # Worker pod image. Rewritten by the same `images:` transformer as
             # the container image above, via kustomizeconfig/images.yaml.
             - name: WORKER_IMAGE
@@ -57,6 +59,10 @@ spec:
             # extended thinking the API streams redacted pings with no text and
             # the UI's thinking twisties stay empty; this buys the summaries
             # that fill them. Modest on purpose — it costs latency.
+            #
+            # Ignored while ChatOps is on sonnet-5, which picks its own depth
+            # (adaptive); it applies only if CHATOPS_MODEL is set to a pre-4.6
+            # model. The worker one below is the load-bearing knob.
             - name: CHATOPS_THINKING_BUDGET
               value: "2048"
             # Passed through onto every worker pod ChatOps creates.

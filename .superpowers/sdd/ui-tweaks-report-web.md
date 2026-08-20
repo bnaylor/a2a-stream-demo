@@ -807,3 +807,35 @@ re-dump the stream and thinking fragments should carry summary text instead of
 74 bare `"[thinking] "` markers. If they are still bare, the budget is being
 rejected rather than the display mode — try raising `WORKER_THINKING_BUDGET`
 before suspecting the UI.
+
+---
+
+# Correction: ChatOps stays on sonnet-5
+
+The chatops→haiku change in `9ebe537` was mine, from an ambiguous reading of
+tweaks2's "let's drop back to haiku" — that line was about the *worker* jobs.
+bnaylor's approved split is **ChatOps `claude-sonnet-5`, workers
+`claude-haiku-4-5`**, and it is now restored in both places:
+`agents/chatops/src/main.ts` and `deploy/base/chatops-deploy.yaml`.
+`WORKER_MODEL` is untouched at haiku everywhere.
+
+This supersedes the "Correction to the brief" note in the previous section,
+which argued from the mistaken premise that both agents were haiku. The
+consequence there was wrong too: with sonnet restored, **ChatOps does get
+adaptive thinking**, and only the worker needs the explicit budget form. The
+per-model builder already did the right thing — no code change was needed for
+it, only the model value:
+
+| agent | model | `thinking` sent |
+|---|---|---|
+| ChatOps | `claude-sonnet-5` | `{ type: "adaptive", display: "summarized" }` |
+| worker | `claude-haiku-4-5` | `{ type: "enabled", budgetTokens: 2048, display: "summarized" }` |
+
+Three tests now pin that pairing against the deployed defaults specifically, so
+neither side can drift silently. `CHATOPS_THINKING_BUDGET` is inert while
+ChatOps is adaptive — the manifest comment says so, and the worker's budget is
+the load-bearing knob.
+
+Verified: `npx vitest run agents/` 53 passed (50 → 53), root 71 passed / 4
+skipped, typecheck clean, and all three kustomize targets render
+`CHATOPS_MODEL=claude-sonnet-5` with `WORKER_MODEL=claude-haiku-4-5`.
