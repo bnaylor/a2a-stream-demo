@@ -76,6 +76,23 @@ scratch directory.
 Delegate this: write a one-page design memo arguing for durable event streams over point-to-point RPC for agent-to-agent messaging. Draft it three times in your scratch directory, critiquing your own previous draft in writing each time, then give me the final draft plus the critiques.
 ```
 
+**6-8 — Longer-running research.** Open-ended questions with several strands
+each, so a worker runs for tens of seconds rather than finishing before the
+audience has looked up. Good for showing the rail under sustained load, the
+thinking twisties filling in, and progress milestones landing on the tap.
+
+```
+what's a good place for brunch in Toronto on the weekends that has good parking?
+```
+
+```
+Suggest options for a long weekend trip for two to the greater Niagara area, including wineries, hiking, entertainment, and dining.  Take mid-September weather into account.
+```
+
+```
+What are some good options for private insurance in Ontario for a foreign student show is not eligible for OHIP?
+```
+
 ## Demo (browser)
 
 **Local development:** start a dev NATS server (with JetStream and WebSocket), run the fake ChatOps agent, and the Vite dev server:

@@ -5,6 +5,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { makeEnvelope, type Envelope } from "@a2a-demo/protocol/src/envelope.ts";
 import { initialState, reduce, type BusEvent, type UiState } from "./model.ts";
+import { MIN_WORKER_PITCH } from "./rail-layout.ts";
 import Rail from "./Rail.tsx";
 
 const CORR = "corr-rail";
@@ -44,6 +45,26 @@ function chunk(session: string, text: string, taskId: string): Envelope {
     contextId: "ctx",
     from: { session, agentType: "claude-code" },
     payload: { role: "agent", parts: [{ kind: "text", text }], messageId: "m1" },
+  });
+}
+
+function closedCard(session: string): Envelope {
+  return makeEnvelope({
+    kind: "agent-closed",
+    correlationId: CORR,
+    from: { session, agentType: "claude-code" },
+    payload: { session },
+  });
+}
+
+function status(session: string, state: "working" | "completed", final: boolean): Envelope {
+  return makeEnvelope({
+    kind: "status-update",
+    correlationId: CORR,
+    taskId: "t1",
+    contextId: "ctx",
+    from: { session, agentType: "claude-code" },
+    payload: { taskId: "t1", contextId: "ctx", final, status: { state } },
   });
 }
 
@@ -137,6 +158,19 @@ describe("Rail", () => {
     expect(raf.mock.calls.length).toBe(framesRequested);
   });
 
+  it("shows the replayed chunk's first line as each step plays", () => {
+    vi.useFakeTimers();
+    render(<Rail state={seeded()} />);
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Replay lynx events" }));
+    });
+    // Step 0 is lynx's agent-card, which carries no text; step 1 is its chunk.
+    act(() => vi.advanceTimersByTime(140));
+    expect(screen.queryByText("reading manifests")).toBeNull();
+    act(() => vi.advanceTimersByTime(140));
+    expect(screen.getByText("reading manifests")).toBeDefined();
+  });
+
   it("unmounts mid-replay without throwing or leaving timers behind", () => {
     vi.useFakeTimers();
     const { unmount } = render(<Rail state={seeded()} />);
@@ -148,5 +182,121 @@ describe("Rail", () => {
     expect(vi.getTimerCount()).toBe(0);
     // Nothing left to fire, and nothing that fires can touch a dead tree.
     expect(() => vi.advanceTimersByTime(5_000)).not.toThrow();
+  });
+});
+
+// Terminal taps used to fade off the rail on a two-second timer, which took
+// their ghost replay with them — the reason replay "sometimes" wasn't there.
+describe("Rail: terminal taps", () => {
+  const done = () =>
+    [ev(card("chatops")), ev(card("otter")), ev(status("otter", "completed", true))].reduce(
+      reduce,
+      initialState,
+    );
+
+  const gone = () =>
+    [ev(card("chatops")), ev(card("otter")), ev(closedCard("otter"))].reduce(reduce, initialState);
+
+  it("keeps a done worker on the rail, greyed, with its replay intact", () => {
+    vi.useFakeTimers();
+    const { container } = render(<Rail state={done()} />);
+    act(() => vi.advanceTimersByTime(10_000));
+    expect(screen.getByText("otter")).toBeDefined();
+    expect(screen.getByText("done")).toBeDefined();
+    expect(container.querySelector(".tap-done")).toBeDefined();
+    expect(screen.getByRole("button", { name: "Replay otter events" })).toBeDefined();
+  });
+
+  it("keeps a closed worker on the rail indefinitely, with its replay intact", () => {
+    vi.useFakeTimers();
+    const { container } = render(<Rail state={gone()} />);
+    act(() => vi.advanceTimersByTime(60_000));
+    expect(screen.getByText("otter")).toBeDefined();
+    expect(screen.getByText("closed")).toBeDefined();
+    expect(container.querySelector(".tap-closed")).toBeDefined();
+    expect(screen.getByRole("button", { name: "Replay otter events" })).toBeDefined();
+  });
+
+  it("offers a dismiss control on done and closed workers", () => {
+    const onDismiss = vi.fn();
+    const { rerender } = render(<Rail state={done()} onDismiss={onDismiss} />);
+    expect(screen.getByRole("button", { name: "Dismiss otter" })).toBeDefined();
+    rerender(<Rail state={gone()} onDismiss={onDismiss} />);
+    expect(screen.getByRole("button", { name: "Dismiss otter" })).toBeDefined();
+  });
+
+  it("offers no dismiss control on a live worker or on chatops", () => {
+    render(<Rail state={seeded()} onDismiss={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: "Dismiss otter" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Dismiss chatops" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Dismiss you" })).toBeNull();
+  });
+
+  it("dispatches dismiss for that session when the control is used", () => {
+    const onDismiss = vi.fn();
+    render(<Rail state={done()} onDismiss={onDismiss} />);
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss otter" }));
+    expect(onDismiss).toHaveBeenCalledWith("otter");
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it("dismisses from the keyboard too", () => {
+    const onDismiss = vi.fn();
+    render(<Rail state={gone()} onDismiss={onDismiss} />);
+    fireEvent.keyDown(screen.getByRole("button", { name: "Dismiss otter" }), { key: "Enter" });
+    expect(onDismiss).toHaveBeenCalledWith("otter");
+  });
+
+  it("drops the tap once the reducer has dismissed the agent", () => {
+    const { rerender } = render(<Rail state={done()} onDismiss={vi.fn()} />);
+    expect(screen.getByText("otter")).toBeDefined();
+    rerender(<Rail state={reduce(done(), { type: "dismiss", session: "otter" })} onDismiss={vi.fn()} />);
+    expect(screen.queryByText("otter")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Replay otter events" })).toBeNull();
+  });
+
+  // The ✕ only exists while the slot is hovered, and in SVG an unpainted gap
+  // is not hovered: without one continuous target the control blinks out as
+  // the cursor travels from the label towards it.
+  it("gives the slot one continuous hover target spanning dot, label and ✕", () => {
+    const { container } = render(<Rail state={done()} onDismiss={vi.fn()} />);
+    const slot = container.querySelector(".tap-slot .tap-hover-target") as SVGRectElement | null;
+    expect(slot).not.toBeNull();
+
+    const x = Number(slot?.getAttribute("x"));
+    const y = Number(slot?.getAttribute("y"));
+    const w = Number(slot?.getAttribute("width"));
+    const h = Number(slot?.getAttribute("height"));
+
+    // Full pitch wide, centred on the tap.
+    expect(w).toBe(MIN_WORKER_PITCH);
+    expect(x).toBe(-MIN_WORKER_PITCH / 2);
+
+    // Tall enough to cover the ✕ above the rail and the status line below it.
+    const dismiss = container.querySelector(".tap-dismiss circle") as SVGCircleElement | null;
+    const cy = Number(dismiss?.getAttribute("cy"));
+    const r = Number(dismiss?.getAttribute("r"));
+    expect(y).toBeLessThanOrEqual(cy - r);
+    const status = container.querySelector(".tap-status") as SVGTextElement | null;
+    expect(y + h).toBeGreaterThanOrEqual(Number(status?.getAttribute("y")));
+
+    // The ✕ sits inside it horizontally too.
+    expect(Number(dismiss?.getAttribute("cx")) + r).toBeLessThanOrEqual(x + w);
+  });
+
+  it("puts the hover target behind the controls, and only where there is one", () => {
+    const { container, rerender } = render(<Rail state={done()} onDismiss={vi.fn()} />);
+    const slot = container.querySelector(".tap-slot:has(.tap-hover-target)");
+    // First child: painted controls stay on top and keep their own clicks.
+    expect(slot?.firstElementChild?.getAttribute("class")).toBe("tap-hover-target");
+
+    // A live worker has nothing to dismiss, so it gets no extra hit area.
+    rerender(<Rail state={seeded()} onDismiss={vi.fn()} />);
+    expect(container.querySelector(".tap-hover-target")).toBeNull();
+  });
+
+  it("shows no dismiss control at all when the rail has no handler", () => {
+    render(<Rail state={done()} />);
+    expect(screen.queryByRole("button", { name: /^Dismiss/ })).toBeNull();
   });
 });

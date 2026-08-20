@@ -250,6 +250,45 @@ describe("buildGhost", () => {
     expect(steps.every((g) => g.correlationId === CORR)).toBe(true);
   });
 
+  // Eleven chips all reading "chunk" say nothing about what was replayed; the
+  // excerpt is what turns the strip back into a readable trace.
+  it("carries the first line of each replayed chunk", () => {
+    const s = apply(
+      initialState,
+      ev(card("otter")),
+      ev(chunk("otter", "reading the manifest\nand then some more")),
+    );
+    const steps = buildGhost(s, "otter");
+    expect(steps[0].excerpt).toBeUndefined(); // agent-card has no text
+    expect(steps[1].excerpt).toBe("reading the manifest");
+  });
+
+  it("elides a long chunk to a single readable line", () => {
+    const s = apply(initialState, ev(chunk("otter", "x".repeat(400))));
+    const excerpt = buildGhost(s, "otter")[0].excerpt ?? "";
+    expect(excerpt).toHaveLength(80);
+    expect(excerpt.endsWith("…")).toBe(true);
+  });
+
+  it("carries excerpts on the reconstructed path too", () => {
+    const s = apply(
+      initialState,
+      ev(card("otter"), false),
+      ev(chunk("otter", "digging through the spec"), false),
+      ev(artifact("otter"), false),
+      ev(status("otter", "completed", true), false),
+    );
+    const steps = buildGhost(s, "otter");
+    expect(steps.map((g) => g.excerpt)).toContain("digging through the spec");
+    expect(steps.map((g) => g.excerpt)).toContain("done");
+  });
+
+  it("leaves the excerpt off steps that carried no text", () => {
+    const s = apply(initialState, ev(card("otter"), false), ev(status("otter", "working", false), false));
+    const steps = buildGhost(s, "otter");
+    expect(steps.every((g) => g.kind !== "status-update" || g.excerpt === undefined)).toBe(true);
+  });
+
   it("labels statuses with their state", () => {
     const s = apply(initialState, ev(card("otter"), false), ev(status("otter", "completed", true), false));
     const labels = buildGhost(s, "otter").map((g) => g.label);
