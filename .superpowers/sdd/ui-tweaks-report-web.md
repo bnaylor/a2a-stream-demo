@@ -718,3 +718,92 @@ No UI behaviour change — **the built bundle hash is identical to `9ebe537`'s**
 - `npm run typecheck` / `typecheck:web` — clean
 - `npm run -w web build` — green, bundle byte-identical to `9ebe537`
 - `npm test` (root) 55 / 4 skipped, `npx vitest run agents/` 37 — untouched
+
+---
+
+# Decision A+ implemented: summarized thinking on workers and ChatOps
+
+## The exact option surface (read, not assumed)
+
+`Options.thinking?: ThinkingConfig` — claude-agent-sdk `sdk.d.ts:1698`, inside
+`export declare type Options = {` (`sdk.d.ts:1369`). The union
+(`sdk.d.ts:7931`):
+
+```ts
+type ThinkingAdaptive = { type: 'adaptive';  display?: 'summarized' | 'omitted' };   // 7923, "Opus 4.6+"
+type ThinkingEnabled  = { type: 'enabled'; budgetTokens?: number;
+                          display?: 'summarized' | 'omitted' };                       // 7942, "older models"
+type ThinkingDisabled = { type: 'disabled' };                                         // 7936
+```
+
+## Correction to the brief
+
+**ChatOps is not on sonnet-5.** It was moved to `claude-haiku-4-5` in `9ebe537`
+(the "haiku workers" item), and `deploy/base/chatops-deploy.yaml` sets
+`CHATOPS_MODEL=claude-haiku-4-5`. So *both* agents are pre-4.6 today and both
+need the explicit `enabled` + `budgetTokens` form; neither can use `adaptive`.
+The code still selects per model, so a future switch back to sonnet picks up
+adaptive automatically rather than silently pinning a small budget.
+
+## What each agent now sends
+
+Shared builder `agents/common/src/thinking.ts`, so the rule lives in one
+unit-testable place and neither agent hand-rolls it.
+
+**Worker** (`agents/worker/src/main.ts`), model `claude-haiku-4-5`:
+
+```ts
+thinking: { type: "enabled", budgetTokens: 2048, display: "summarized" }
+```
+
+**ChatOps** (`agents/chatops/src/session.ts`), model `claude-haiku-4-5`:
+
+```ts
+thinking: { type: "enabled", budgetTokens: 2048, display: "summarized" }
+```
+
+Budgets are env-tunable — `WORKER_THINKING_BUDGET` and
+`CHATOPS_THINKING_BUDGET`, default 2048, junk/zero/negative values ignored
+rather than forwarded to the API. Both are set in
+`deploy/base/chatops-deploy.yaml`, and `WORKER_THINKING_BUDGET` was added to
+`PASSTHROUGH_ENV_KEYS` so ChatOps copies it onto every worker pod it creates —
+tuning the twisties is one env var on one Deployment, not a worker image
+rebuild.
+
+Had either agent been on sonnet-5/opus-4.6+, it would instead send
+`{ type: "adaptive", display: "summarized" }`, letting the model choose depth.
+
+## Nothing was impossible, with one ceiling
+
+Everything asked for is wired. The one limit, unchanged from the diagnosis:
+**there is no raw/plaintext thinking mode.** `sdk.d.ts:7925` and `7942` offer
+`'summarized' | 'omitted'` and nothing else, so twisties will show model-written
+summaries, never verbatim reasoning. That is the most the API exposes.
+
+## Verification
+
+Type-level proof that the shape is genuinely accepted: `npm run typecheck` is
+clean, and mutating the `display` literal to an invalid value produces **3
+`error TS`** at the real call sites — so the passing typecheck is meaningful,
+not vacuous.
+
+| mutation | result |
+|---|---|
+| invalid `display` literal | 3 tsc errors |
+| stop asking for summaries | 3 tests failed |
+| send haiku the adaptive form it predates | 3 tests failed |
+| let junk budgets through to the API | 2 tests failed |
+
+- `npx vitest run agents/` — **50 passed** (37 → 50: 11 new for the builder, 2
+  for the pod passthrough)
+- `npm test` (root) — 68 passed / 4 skipped
+- `npm run -w web test` — 238 passed, `typecheck:web` clean, build green and
+  bundle unchanged (no UI change in this commit)
+- `kubectl kustomize` — base, local and gke all render; gke shows both
+  `*_THINKING_BUDGET` at 2048
+
+**The real proof is wire-level and is yours to take:** after rebuild/redeploy,
+re-dump the stream and thinking fragments should carry summary text instead of
+74 bare `"[thinking] "` markers. If they are still bare, the budget is being
+rejected rather than the display mode — try raising `WORKER_THINKING_BUDGET`
+before suspecting the UI.

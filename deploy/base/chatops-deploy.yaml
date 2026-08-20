@@ -53,6 +53,15 @@ spec:
             # model — which is the opposite of the point being made here).
             - name: WORKER_MODEL
               value: "claude-haiku-4-5"
+            # Thinking budget (tokens) for summarized thinking. Without
+            # extended thinking the API streams redacted pings with no text and
+            # the UI's thinking twisties stay empty; this buys the summaries
+            # that fill them. Modest on purpose — it costs latency.
+            - name: CHATOPS_THINKING_BUDGET
+              value: "2048"
+            # Passed through onto every worker pod ChatOps creates.
+            - name: WORKER_THINKING_BUDGET
+              value: "2048"
             # Worker max budget (USD per task).
             - name: WORKER_MAX_BUDGET_USD
               value: "1.50"

@@ -42,7 +42,15 @@ export interface K8sConfig {
  * The gke overlay sets all three; the local overlay sets none, and workers fall
  * back to the ANTHROPIC_API_KEY Secret.
  */
-export const PASSTHROUGH_ENV_KEYS: readonly string[] = VERTEX_ENV_KEYS;
+/**
+ * Copied from ChatOps' own env onto each worker pod. Vertex config, plus the
+ * thinking budget so the twisties can be tuned from one deployment env var
+ * rather than needing a worker image change.
+ */
+export const PASSTHROUGH_ENV_KEYS: readonly string[] = [
+  ...VERTEX_ENV_KEYS,
+  "WORKER_THINKING_BUDGET",
+];
 
 export const WORKER_APP_LABEL = "a2a-worker";
 export const SESSION_LABEL = "a2a-demo/session";

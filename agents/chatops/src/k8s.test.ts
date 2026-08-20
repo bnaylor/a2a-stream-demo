@@ -67,6 +67,21 @@ describe("workerPodManifest", () => {
     expect(env).not.toHaveProperty("SOMETHING_ELSE");
   });
 
+  // Tuning the twisties should be one env var on the ChatOps deployment, not a
+  // worker image rebuild.
+  it("passes the thinking budget through to the worker", () => {
+    const pod = workerPodManifest(
+      { ...cfg, passthroughEnv: { WORKER_THINKING_BUDGET: "4096" } },
+      spec
+    );
+    expect(envOf(pod).WORKER_THINKING_BUDGET).toBe("4096");
+  });
+
+  it("leaves the worker on its default budget when ChatOps sets none", () => {
+    const env = envOf(workerPodManifest({ ...cfg, passthroughEnv: {} }, spec));
+    expect(env).not.toHaveProperty("WORKER_THINKING_BUDGET");
+  });
+
   it("omits Vertex env entirely when ChatOps is on the API-key path", () => {
     const env = envOf(workerPodManifest({ ...cfg, passthroughEnv: {} }, spec));
     expect(env).not.toHaveProperty("CLAUDE_CODE_USE_VERTEX");

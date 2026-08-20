@@ -1,5 +1,9 @@
 import { McpServerConfig, query } from "@anthropic-ai/claude-agent-sdk";
-import { SdkMsg } from "@a2a-demo/agents-common";
+import {
+  SdkMsg,
+  thinkingBudgetFromEnv,
+  thinkingConfig,
+} from "@a2a-demo/agents-common";
 
 export interface ChatSession {
   send(prompt: string): AsyncIterable<SdkMsg>;
@@ -50,6 +54,12 @@ export function makeSdkChatSession(
             ...(sessionId ? { resume: sessionId } : {}),
             permissionMode: "dontAsk",
             includePartialMessages: true,
+            // Same reason as the worker: the default redacted phase streams
+            // thinking pings with no text, leaving ChatOps' twisty empty.
+            thinking: thinkingConfig(
+              model,
+              thinkingBudgetFromEnv(process.env.CHATOPS_THINKING_BUDGET),
+            ),
             mcpServers: opts.mcpServers,
             allowedTools: opts.allowedTools ?? DEFAULT_ALLOWED,
             disallowedTools: opts.disallowedTools ?? DEFAULT_DISALLOWED,
