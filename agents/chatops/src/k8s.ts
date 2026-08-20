@@ -71,6 +71,7 @@ export function workerPodManifest(cfg: K8sConfig, spec: WorkerPodSpec): V1Pod {
     spec: {
       restartPolicy: "Never",
       automountServiceAccountToken: false,
+      securityContext: { runAsNonRoot: true, runAsUser: 1000 },
       containers: [
         {
           name: "worker",

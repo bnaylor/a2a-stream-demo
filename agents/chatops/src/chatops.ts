@@ -41,8 +41,9 @@ const DIGEST_TEXT_CHARS = 120;
 const DIGEST_MAX_EVENTS = 30;
 const TERMINAL_PHASES = ["Failed", "Succeeded"];
 const FENCE_SENTINEL_RE = /<\/?untrusted_worker_output[^>]*>/gi;
-/** The only states that may be rendered outside the untrusted-output fence. */
+/** The only states we will ever render. Anything else fails closed. */
 const NOTICE_STATES = new Set(["completed", "failed", "canceled"]);
+const UNKNOWN_STATE = "failed";
 
 function textOf(payload: unknown): string {
   const parts = (payload as { parts?: { kind: string; text?: string }[] }).parts;
@@ -58,8 +59,32 @@ function stateOf(payload: unknown): string | undefined {
  * Drop fence sentinels, then cap. Idempotent, so it is safe to apply both when
  * caching an artifact and again when rendering it.
  */
-function boundedExcerpt(text: string): string {
-  return text.replace(FENCE_SENTINEL_RE, "").slice(0, NOTICE_ARTIFACT_CHARS);
+function boundedExcerpt(text: string, cap = NOTICE_ARTIFACT_CHARS): string {
+  return text.replace(FENCE_SENTINEL_RE, "").slice(0, cap);
+}
+
+/** Neutralize anything tag-shaped so worker text can't be read as structure. */
+function escapeAngles(text: string): string {
+  return text.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/** Strip sentinels, cap, then escape — the full worker-text-to-model treatment. */
+function safeText(text: string, cap = NOTICE_ARTIFACT_CHARS): string {
+  return escapeAngles(boundedExcerpt(text, cap));
+}
+
+/**
+ * Worker-reported states are rendered as our own words, so only our own
+ * literals may appear. Unknown states fail CLOSED (`failed`) rather than
+ * flattering a task that may never have finished.
+ */
+function safeState(state: string | undefined): string {
+  return state && NOTICE_STATES.has(state) ? state : UNKNOWN_STATE;
+}
+
+/** Wrap worker-derived text in the fence the system prompt tells Claude about. */
+function fence(attr: string, body: string): string {
+  return `<untrusted_worker_output ${attr}>${body}</untrusted_worker_output>`;
 }
 
 /**
@@ -76,13 +101,9 @@ function boundedExcerpt(text: string): string {
  * `session` is our own generated name, never worker-controlled.
  */
 function notice(session: string, state: string, artifact: string): string {
-  const excerpt = boundedExcerpt(artifact)
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-  const safeState = NOTICE_STATES.has(state) ? state : "completed";
   return (
-    `[notice] session ${session} ${safeState}: ` +
-    `<untrusted_worker_output session="${session}">${excerpt}</untrusted_worker_output>`
+    `[notice] session ${session} ${safeState(state)}: ` +
+    fence(`session="${session}"`, safeText(artifact))
   );
 }
 
@@ -238,19 +259,26 @@ export async function startChatOps(deps: ChatOpsDeps): Promise<ChatOpsHandle> {
     return { taskId, session };
   }
 
-  // 3. task_status
+  // 3. task_status — the digest lands in ChatOps's context as a tool result, so
+  //    it gets exactly the same treatment as a notice: every worker-derived
+  //    line sanitized, states allowlisted, the whole body inside one fence.
   async function taskStatus(taskId: string): Promise<string> {
+    const label = safeText(taskId, DIGEST_TEXT_CHARS);
     const events = await deps.replayEvents(taskId);
-    if (events.length === 0) return `no events for ${taskId}`;
+    if (events.length === 0) return `no events for ${label}`;
     const lines = events.slice(-DIGEST_MAX_EVENTS).map((ev) => {
+      // ev.kind is validated against the protocol's closed kind list on parse.
       const bits: string[] = [ev.kind];
       const state = stateOf(ev.payload);
-      if (state) bits.push(state);
-      const text = textOf(ev.payload).slice(0, DIGEST_TEXT_CHARS);
+      if (state) bits.push(safeState(state));
+      const text = safeText(textOf(ev.payload), DIGEST_TEXT_CHARS);
       if (text) bits.push(text);
       return bits.join(" ");
     });
-    return `${taskId} (${events.length} events)\n${lines.join("\n")}`;
+    return (
+      `${label} (${events.length} events)\n` +
+      fence(`task="${label}"`, `\n${lines.join("\n")}\n`)
+    );
   }
 
   // 4. list_sessions

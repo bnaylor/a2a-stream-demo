@@ -5,6 +5,11 @@ metadata:
   namespace: a2a-demo
 spec:
   replicas: 1
+  # ChatOps is a singleton consumer of the inbox: two instances would both
+  # answer every chat turn. Recreate tears the old pod down before the new one
+  # starts, so a rollout never overlaps.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: chatops
