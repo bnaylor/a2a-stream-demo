@@ -33,6 +33,7 @@ interface Delegation {
   correlationId: string;
   artifact: string;
   gcDone: boolean;
+  unsub?: () => void;
 }
 
 const NOTICE_ARTIFACT_CHARS = 500;
@@ -50,6 +51,19 @@ function stateOf(payload: unknown): string | undefined {
   return (payload as { status?: { state?: string } }).status?.state;
 }
 
+/**
+ * Worker output is untrusted input, not instructions: fence every excerpt we
+ * splice into the ChatOps prompt so a worker can't steer the agent that holds
+ * pod-creation powers. `main.ts`'s system prompt states the matching rule.
+ */
+function notice(session: string, state: string, artifact: string): string {
+  const excerpt = artifact.slice(0, NOTICE_ARTIFACT_CHARS);
+  return (
+    `[notice] session ${session} ${state}: ` +
+    `<untrusted_worker_output session="${session}">${excerpt}</untrusted_worker_output>`
+  );
+}
+
 function isFinal(env: Envelope): boolean {
   return (
     env.kind === "status-update" &&
@@ -62,7 +76,6 @@ export async function startChatOps(deps: ChatOpsDeps): Promise<ChatOpsHandle> {
   const pendingNotices: string[] = [];
   /** session name -> delegation record (also the sweep's session->taskId map) */
   const delegations = new Map<string, Delegation>();
-  const unsubs: (() => void)[] = [];
   /** correlationId of the chat turn currently (or most recently) served */
   let turnCorrelationId = "";
   /** serializes chat turns so two overlapping turns never interleave events */
@@ -97,6 +110,14 @@ export async function startChatOps(deps: ChatOpsDeps): Promise<ChatOpsHandle> {
     const pod = pods.find((p) => p.session === session);
     if (rec) rec.gcDone = true;
     if (pod) await deps.pods.deletePod(pod.name);
+  }
+
+  /** A finished delegation keeps nothing: drop its subscription and its record. */
+  function prune(session: string): void {
+    const rec = delegations.get(session);
+    if (!rec) return;
+    rec.unsub?.();
+    delegations.delete(session);
   }
 
   // 1. Chat turn: drain notices into the prompt, stream the answer onto the
@@ -174,24 +195,24 @@ export async function startChatOps(deps: ChatOpsDeps): Promise<ChatOpsHandle> {
     );
 
     const unsub = await deps.subscribeEvents(taskId, (ev) => {
+      // The events subject is world-writable on this bus, so only the worker
+      // we actually delegated to may drive this delegation's state.
+      if (ev.from?.session !== session) return;
       if (ev.kind === "artifact-update") {
-        rec.artifact = textOf(ev.payload);
+        rec.artifact = textOf(ev.payload).slice(0, NOTICE_ARTIFACT_CHARS);
         return;
       }
       if (!isFinal(ev)) return;
       const state = stateOf(ev.payload) ?? "completed";
-      pendingNotices.push(
-        `[notice] session ${session} ${state}: ${rec.artifact.slice(
-          0,
-          NOTICE_ARTIFACT_CHARS
-        )}`
-      );
+      pendingNotices.push(notice(session, state, rec.artifact));
       // Worker publishes its own agent-closed via bus.close(); we only GC.
-      void gcPod(session).catch(() => {
-        /* pod already gone */
-      });
+      void gcPod(session)
+        .catch(() => {
+          /* pod already gone */
+        })
+        .then(() => prune(session));
     });
-    unsubs.push(unsub);
+    rec.unsub = unsub;
     return { taskId, session };
   }
 
@@ -239,6 +260,7 @@ export async function startChatOps(deps: ChatOpsDeps): Promise<ChatOpsHandle> {
         rec.gcDone = true;
       }
       await deps.pods.deletePod(pod.name);
+      prune(pod.session);
     }
   }
 
@@ -256,7 +278,7 @@ export async function startChatOps(deps: ChatOpsDeps): Promise<ChatOpsHandle> {
     sweepOnce,
     stop: async () => {
       unwatch();
-      for (const u of unsubs) u();
+      for (const session of [...delegations.keys()]) prune(session);
       await queue;
     },
   };

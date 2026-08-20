@@ -24,6 +24,8 @@ export interface K8sConfig {
   image: string;
   natsUrl: string;
   secretName: string;
+  /** Passed through to the worker as WORKER_MODEL when set. */
+  workerModel?: string;
 }
 
 export const WORKER_APP_LABEL = "a2a-worker";
@@ -49,8 +51,9 @@ export function workerPodManifest(cfg: K8sConfig, spec: WorkerPodSpec): V1Pod {
       },
     },
   ];
-  const workerModel = process.env.WORKER_MODEL;
-  if (workerModel) env.push({ name: "WORKER_MODEL", value: workerModel });
+  if (cfg.workerModel) {
+    env.push({ name: "WORKER_MODEL", value: cfg.workerModel });
+  }
 
   return {
     apiVersion: "v1",
