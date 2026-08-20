@@ -36,28 +36,40 @@ const LEAD_LEN = 28;
 const NAME_Y = RAIL_Y + LEAD_LEN + 15;
 const STATUS_Y = NAME_Y + 14;
 const STRIP_Y = 132;
-const SVG_HEIGHT = 168;
+/** The replayed chunk's own first line, under the strip. */
+const PEEK_Y = STRIP_Y + 32;
+const SVG_HEIGHT = 184;
 const FALLBACK_WIDTH = 1200;
+/** Mono advance width at the peek's font size, for fitting text to the rail. */
+const PEEK_CHAR_PX = 5.6;
 
 /** One pulse's flight time, end to end. */
 const PULSE_MS = 900;
 /** Gap between ghost-replay steps — fast enough to read as a burst. */
 const GHOST_STEP_MS = 120;
 const RIPPLE_MS = 1100;
-/** How long a closed agent's tap hangs on the rail before it is dropped. */
-const CLOSE_FADE_MS = 2000;
+/** Fraction of the flight spent blooming into the destination tap. */
+const BLOOM_FROM = 0.82;
 const MAX_FLIGHTS = 64;
 const NAME_MAX = 18;
 
-/** Bigger payload, bigger charge: the eye should sort kinds without a legend. */
+/**
+ * Bigger payload, bigger charge: the eye should sort kinds without a legend.
+ * Sized up from the first pass — at the old scale a `message-chunk` was a
+ * two-pixel dot with a short wake and read as noise on the trace rather than
+ * as traffic. The ratios between kinds are unchanged; the whole set is louder.
+ */
 const PULSE_SHAPE: Record<EnvelopeKind, { r: number; wake: number }> = {
-  "artifact-update": { r: 5.5, wake: 96 },
-  task: { r: 4.5, wake: 76 },
-  "agent-card": { r: 4, wake: 56 },
-  "agent-closed": { r: 4, wake: 56 },
-  "status-update": { r: 3, wake: 46 },
-  "message-chunk": { r: 2, wake: 26 },
+  "artifact-update": { r: 7.5, wake: 168 },
+  task: { r: 6.5, wake: 138 },
+  "agent-card": { r: 5.5, wake: 104 },
+  "agent-closed": { r: 5.5, wake: 104 },
+  "status-update": { r: 4.5, wake: 88 },
+  "message-chunk": { r: 3.4, wake: 58 },
 };
+
+/** Ghosts are quieter than live traffic, but no longer invisible. */
+const GHOST_SHAPE = { r: 4.4, wake: 76 };
 
 interface Flight {
   key: string;
@@ -121,6 +133,12 @@ function statusText(
   }
 }
 
+/** Clips the peek to whatever the rail can actually hold at this width. */
+function fitPeek(text: string, railWidth: number): string {
+  const max = Math.max(12, Math.floor(railWidth / PEEK_CHAR_PX));
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
 /** Lays the replay chips out end to end, dropping any that run off the rail. */
 function chipRow(steps: GhostStep[], railEnd: number) {
   const row: { step: GhostStep; i: number; x: number; w: number }[] = [];
@@ -134,11 +152,16 @@ function chipRow(steps: GhostStep[], railEnd: number) {
   return row;
 }
 
-export default function Rail({ state }: { state: UiState }) {
+interface RailProps {
+  state: UiState;
+  /** Retires a finished worker's tap. Absent in tests that only render. */
+  onDismiss?: (session: string) => void;
+}
+
+export default function Rail({ state, onDismiss }: RailProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(FALLBACK_WIDTH);
   const [, paint] = useReducer((n: number) => n + 1, 0);
-  const [retireVersion, retire] = useReducer((n: number) => n + 1, 0);
   const [ghost, setGhost] = useState<GhostRun | null>(null);
   const reduced = useMemo(prefersReducedMotion, []);
 
@@ -146,7 +169,6 @@ export default function Rail({ state }: { state: UiState }) {
   const ripplesRef = useRef<Ripple[]>([]);
   const watermarkRef = useRef(0);
   const heartbeatsRef = useRef(new Map<string, number>());
-  const closedAtRef = useRef(new Map<string, number>());
   const rafRef = useRef<number | null>(null);
 
   // --- measure ---------------------------------------------------------------
@@ -161,35 +183,12 @@ export default function Rail({ state }: { state: UiState }) {
   }, []);
 
   // --- who is on the rail ----------------------------------------------------
-  // Closed agents keep their slot while they fade, so the rail needs a nudge to
-  // re-render once the fade is over. Poll only while something is actually
-  // fading — the reducer keeps closed agents around forever, so "is closed"
-  // alone would leave a timer running for the rest of the session.
-  useEffect(() => {
-    const now = performance.now();
-    let fading = false;
-    for (const [session, agent] of state.agents) {
-      if (agent.status !== "closed") {
-        closedAtRef.current.delete(session);
-        continue;
-      }
-      if (!closedAtRef.current.has(session)) closedAtRef.current.set(session, now);
-      if (now - (closedAtRef.current.get(session) ?? now) < CLOSE_FADE_MS) fading = true;
-    }
-    if (!fading) return;
-    const timer = setTimeout(retire, 300);
-    return () => clearTimeout(timer);
-  }, [state.agents, retireVersion]);
-
-  const visible = useMemo(() => {
-    const now = performance.now();
-    return [...state.agents.values()].filter((agent) => {
-      if (agent.status !== "closed") return true;
-      const at = closedAtRef.current.get(agent.session);
-      return at === undefined || now - at < CLOSE_FADE_MS;
-    });
-    // `retireVersion` is the timer's way of saying "re-check the fade clock".
-  }, [state.agents, retireVersion]);
+  // Every agent the reducer knows about, for as long as it knows about it. A
+  // finished worker's tap used to fade off the trace on a two-second timer,
+  // which took its ghost replay with it — the demo's best affordance,
+  // available only if you clicked fast enough. Taps now leave by one route
+  // only: the user dismissing them.
+  const visible = useMemo(() => [...state.agents.values()], [state.agents]);
 
   const taps = useMemo(() => layoutTaps(visible, width), [visible, width]);
   const tapX = useMemo(() => new Map(taps.map((t) => [t.session, t.x])), [taps]);
@@ -228,13 +227,13 @@ export default function Rail({ state }: { state: UiState }) {
         from === WEB_SESSION
           ? (tapX.get(CHATOPS_SESSION) ?? edge)
           : (tapX.get(WEB_SESSION) ?? RAIL_PAD_LEFT);
-      const shape = PULSE_SHAPE[kind];
+      const shape = ghostly ? GHOST_SHAPE : PULSE_SHAPE[kind];
       flightsRef.current.push({
         key,
         x0,
         x1,
-        r: ghostly ? 2.5 : shape.r,
-        wake: ghostly ? 30 : shape.wake,
+        r: shape.r,
+        wake: shape.wake,
         color,
         ghost: ghostly,
         start: performance.now(),
@@ -310,8 +309,12 @@ export default function Rail({ state }: { state: UiState }) {
     const x = reduced ? f.x0 : f.x0 + (f.x1 - f.x0) * p;
     const dir = f.x1 >= f.x0 ? 1 : -1;
     const wake = reduced ? 0 : f.wake * Math.min(1, p * 4);
-    const opacity = Math.min(1, p / 0.08) * Math.min(1, (1 - p) / 0.25) * (f.ghost ? 0.5 : 1);
-    return { ...f, x, dir, wake, opacity };
+    const opacity = Math.min(1, p / 0.06) * Math.min(1, (1 - p) / 0.18) * (f.ghost ? 0.8 : 1);
+    // The last stretch of the flight lands: a short ring at the destination
+    // tap, so an arrival is something you catch out of the corner of your eye
+    // rather than something you have to already be watching for.
+    const bloom = reduced || p < BLOOM_FROM ? 0 : (p - BLOOM_FROM) / (1 - BLOOM_FROM);
+    return { ...f, x, dir, wake, opacity, bloom };
   });
 
   const ripplePhase = new Map<string, number>();
@@ -319,7 +322,9 @@ export default function Rail({ state }: { state: UiState }) {
     ripplePhase.set(r.session, Math.min(1, (now - r.start) / RIPPLE_MS));
   }
 
+  const current = ghost && ghost.index >= 0 ? ghost.steps[ghost.index] : undefined;
   const ghostCorr = ghost?.steps[Math.max(0, ghost.index)]?.correlationId ?? "";
+  const peek = current?.excerpt ?? "";
 
   return (
     <div className="rail-panel" ref={hostRef}>
@@ -341,7 +346,7 @@ export default function Rail({ state }: { state: UiState }) {
       >
         <defs>
           <filter id="rail-glow" x="-60%" y="-400%" width="220%" height="900%">
-            <feGaussianBlur stdDeviation="3.2" result="blur" />
+            <feGaussianBlur stdDeviation="4.4" result="blur" />
             <feMerge>
               <feMergeNode in="blur" />
               <feMergeNode in="SourceGraphic" />
@@ -384,12 +389,18 @@ export default function Rail({ state }: { state: UiState }) {
               : (agent?.status ?? "absent");
           const phase = ripplePhase.get(tap.session);
           const clickable = tap.kind !== "you" && agent !== undefined;
+          // Terminal workers are the user's to clear; live ones are not, and
+          // ChatOps outlives every turn.
+          const dismissable =
+            tap.kind === "worker" &&
+            onDismiss !== undefined &&
+            (status === "done" || status === "closed");
           return (
             // Two groups on purpose: the outer one carries the x position as an
             // attribute, the inner one owns the CSS transform the lifecycle
             // animations drive — a CSS transform would otherwise replace the
             // attribute and snap the tap to x=0.
-            <g key={tap.session} transform={`translate(${tap.x} 0)`}>
+            <g key={tap.session} className="tap-slot" transform={`translate(${tap.x} 0)`}>
             <g
               className={`tap tap-${tap.kind} tap-${status}${clickable ? " tap-clickable" : ""}`}
               role={clickable ? "button" : undefined}
@@ -434,12 +445,43 @@ export default function Rail({ state }: { state: UiState }) {
                 {statusText(tap, agent, state.connection)}
               </text>
             </g>
+            {/* A sibling, not a child, of the replay button: nesting one
+                control inside another hides it from screen readers that honour
+                the presentational-children rule. */}
+            {dismissable && (
+              <g
+                className="tap-dismiss"
+                role="button"
+                tabIndex={0}
+                aria-label={`Dismiss ${tap.session}`}
+                onClick={() => onDismiss?.(tap.session)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    onDismiss?.(tap.session);
+                  }
+                }}
+              >
+                <circle className="tap-dismiss-hit" cx={14} cy={RAIL_Y - 15} r={8} />
+                <path className="tap-dismiss-x" d={`M ${11} ${RAIL_Y - 18} l 6 6 M ${17} ${RAIL_Y - 18} l -6 6`} />
+              </g>
+            )}
             </g>
           );
         })}
 
         {flights.map((f) => (
           <g key={f.key} className={f.ghost ? "pulse pulse-ghost" : "pulse"} opacity={f.opacity}>
+            {f.bloom > 0 && (
+              <circle
+                className="pulse-bloom"
+                cx={f.x1}
+                cy={RAIL_Y}
+                r={f.r + f.bloom * 15}
+                stroke={f.ghost ? undefined : f.color}
+                opacity={(1 - f.bloom) * 0.65}
+              />
+            )}
             {f.wake > 1 && (
               <line
                 className="pulse-wake"
@@ -448,7 +490,7 @@ export default function Rail({ state }: { state: UiState }) {
                 y1={RAIL_Y}
                 y2={RAIL_Y}
                 stroke={f.ghost ? undefined : f.color}
-                strokeWidth={Math.max(1, f.r * 0.9)}
+                strokeWidth={Math.max(1.4, f.r * 1.1)}
               />
             )}
             <circle
@@ -459,6 +501,8 @@ export default function Rail({ state }: { state: UiState }) {
               fill={f.ghost ? undefined : f.color}
               filter={f.ghost ? undefined : "url(#rail-glow)"}
             />
+            {/* White-hot centre: the charge reads as lit rather than painted. */}
+            <circle className="pulse-core" cx={f.x} cy={RAIL_Y} r={Math.max(1, f.r * 0.42)} />
           </g>
         ))}
 
@@ -472,6 +516,13 @@ export default function Rail({ state }: { state: UiState }) {
                 </text>
               </g>
             ))}
+            {/* What the step in flight actually carried. Chips alone say
+                "chunk, chunk, chunk"; this says what was in them. */}
+            {peek && (
+              <text className="ghost-peek" x={RAIL_PAD_LEFT} y={PEEK_Y}>
+                {fitPeek(peek, railEnd - RAIL_PAD_LEFT)}
+              </text>
+            )}
           </g>
         )}
       </svg>

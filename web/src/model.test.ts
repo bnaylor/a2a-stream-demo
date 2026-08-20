@@ -4,6 +4,7 @@ import {
   type BusEvent,
   type UiState,
   corrColor,
+  excerptOf,
   initialState,
   reduce,
 } from "./model.ts";
@@ -395,6 +396,267 @@ describe("reduce: chat entries", () => {
       ev(chunk("otter", "b", "task-3")),
     );
     expect(new Set(s.chat.map((c) => c.id)).size).toBe(3);
+  });
+});
+
+// Extended thinking is a firehose of token-wise deltas, each one carrying the
+// `[thinking] ` marker. Interleaved into the transcript it shredded everyone
+// else's output; it now collects into one entry per agent-task.
+describe("reduce: thinking", () => {
+  const think = (session: string, text: string, taskId = TASK, corr = CORR) =>
+    ev(chunk(session, `[thinking] ${text}`, taskId, corr));
+
+  it("routes a thinking chunk into a thinking entry, not a delegate line", () => {
+    const s = apply(initialState, ev(card("otter")), think("otter", "Let me start"));
+    expect(s.chat).toHaveLength(1);
+    expect(s.chat[0]).toMatchObject({
+      kind: "thinking",
+      session: "otter",
+      taskId: TASK,
+      correlationId: CORR,
+      latest: "Let me start",
+    });
+    expect(s.chat[0].lines).toEqual(["Let me start"]);
+  });
+
+  it("merges token-wise deltas into one coherent line", () => {
+    const s = apply(
+      initialState,
+      think("otter", "Let me "),
+      think("otter", "think about "),
+      think("otter", "NATS."),
+    );
+    expect(s.chat).toHaveLength(1);
+    expect(s.chat[0].lines).toEqual(["Let me think about NATS."]);
+    expect(s.chat[0].latest).toBe("Let me think about NATS.");
+  });
+
+  it("splits on newlines inside a delta, however they arrive", () => {
+    const s = apply(
+      initialState,
+      think("otter", "first line"),
+      think("otter", "\nsecond "),
+      think("otter", "line\nthird line"),
+    );
+    expect(s.chat[0].lines).toEqual(["first line", "second line", "third line"]);
+    expect(s.chat[0].latest).toBe("third line");
+  });
+
+  it("keeps the latest line non-empty across a trailing newline", () => {
+    const s = apply(initialState, think("otter", "a thought"), think("otter", "\n"));
+    expect(s.chat[0].latest).toBe("a thought");
+  });
+
+  it("keeps a separate entry per session and per task", () => {
+    const s = apply(
+      initialState,
+      think("otter", "otter thought", "t1"),
+      think("lynx", "lynx thought", "t2"),
+      think("otter", " continues", "t1"),
+      think("otter", "another task", "t3"),
+    );
+    expect(s.chat).toHaveLength(3);
+    expect(s.chat.map((c) => c.latest)).toEqual([
+      "otter thought continues",
+      "lynx thought",
+      "another task",
+    ]);
+  });
+
+  it("pins the entry where the reasoning first appeared, however late the deltas are", () => {
+    const s = apply(
+      initialState,
+      think("otter", "start", "t1"),
+      ev(chunk("lynx", "unrelated output", "t2")),
+      think("otter", " and end", "t1"),
+    );
+    expect(s.chat.map((c) => c.kind)).toEqual(["thinking", "delegate"]);
+    expect(s.chat[0].latest).toBe("start and end");
+  });
+
+  it("gives chatops' own thinking the same treatment", () => {
+    const s = apply(initialState, ev(chunk("chatops", "[thinking] weighing options")));
+    expect(s.chat).toHaveLength(1);
+    expect(s.chat[0]).toMatchObject({ kind: "thinking", session: "chatops" });
+  });
+
+  // The bug this whole change exists to kill: thinking used to land as its own
+  // transcript line in the middle of ChatOps' sentence.
+  it("no longer splits chatops narrative around its own thinking", () => {
+    const s = apply(
+      initialState,
+      ev(chunk("chatops", "Spinning up a worker ")),
+      ev(chunk("chatops", "[thinking] which pool should ")),
+      ev(chunk("chatops", "[thinking] this go to — the research one")),
+      ev(chunk("chatops", "for that research.")),
+    );
+    expect(s.chat.map((c) => c.kind)).toEqual(["chatops", "thinking"]);
+    expect(s.chat[0].text).toBe("Spinning up a worker for that research.");
+    expect(s.chat[1].latest).toBe("which pool should this go to — the research one");
+  });
+
+  it("still ends a speaker's turn when another agent genuinely cuts in", () => {
+    const s = apply(
+      initialState,
+      ev(chunk("chatops", "one ", "t1")),
+      ev(chunk("otter", "interruption", "t2")),
+      ev(chunk("chatops", "two", "t1")),
+    );
+    expect(s.chat.map((c) => c.kind)).toEqual(["chatops", "delegate", "chatops"]);
+  });
+
+  it("leaves [progress] milestones as their own transcript lines", () => {
+    const s = apply(
+      initialState,
+      ev(card("otter")),
+      think("otter", "hmm"),
+      ev(chunk("otter", "[progress] fetching spec 2/2")),
+    );
+    expect(s.chat.map((c) => c.kind)).toEqual(["thinking", "progress"]);
+    expect(s.agents.get("otter")?.statusLine).toBe("fetching spec 2/2");
+  });
+
+  it("leaves ordinary delegate output untouched", () => {
+    const s = apply(initialState, ev(chunk("otter", "here is the answer")));
+    expect(s.chat[0]).toMatchObject({ kind: "delegate", text: "here is the answer" });
+    expect(s.chat[0].lines).toBeUndefined();
+  });
+});
+
+// ChatOps publishes a chat task of its own when a delegation finishes, so the
+// user gets the result without asking. Nobody submitted it, so there is no
+// `user` entry in front of it — it must still read as an ordinary reply.
+describe("reduce: proactive chatops summaries", () => {
+  const SUMMARY_TASK = "task-summary";
+  const DELEGATE_CORR = "corr-delegate";
+
+  it("renders a self-initiated chatops task as a normal chatops entry", () => {
+    const s = apply(
+      initialState,
+      ev(chunk("chatops", "[otter] found ", SUMMARY_TASK, DELEGATE_CORR)),
+      ev(chunk("chatops", "three sources.", SUMMARY_TASK, DELEGATE_CORR)),
+      ev(status("chatops", "completed", true, SUMMARY_TASK, DELEGATE_CORR)),
+    );
+    expect(s.chat).toHaveLength(1);
+    expect(s.chat[0]).toMatchObject({
+      kind: "chatops",
+      session: "chatops",
+      text: "[otter] found three sources.",
+      taskId: SUMMARY_TASK,
+    });
+  });
+
+  it("carries the delegate's correlation id, so the chip matches the thread", () => {
+    const s = apply(
+      initialState,
+      ev(submission("research NATS", "otter", "task-deleg", DELEGATE_CORR)),
+      ev(chunk("otter", "on it", "task-deleg", DELEGATE_CORR)),
+      ev(chunk("chatops", "[otter] done.", SUMMARY_TASK, DELEGATE_CORR)),
+    );
+    expect(s.chat.map((c) => c.correlationId)).toEqual([DELEGATE_CORR, DELEGATE_CORR]);
+  });
+
+  it("keeps the summary out of the preceding turn's bubble", () => {
+    const s = apply(
+      initialState,
+      ev(chunk("chatops", "Delegated to otter.", TASK, CORR)),
+      ev(chunk("chatops", "[otter] done.", SUMMARY_TASK, DELEGATE_CORR)),
+    );
+    expect(s.chat.map((c) => c.text)).toEqual(["Delegated to otter.", "[otter] done."]);
+  });
+
+  it("does not retire the chatops agent when its own summary task completes", () => {
+    const s = apply(
+      initialState,
+      ev(card("chatops")),
+      ev(status("chatops", "completed", true, SUMMARY_TASK, DELEGATE_CORR)),
+    );
+    expect(s.agents.get("chatops")?.status).toBe("live");
+  });
+});
+
+describe("reduce: dismiss", () => {
+  it("removes the agent from the view", () => {
+    const s = apply(initialState, ev(card("otter")), ev(status("otter", "completed", true)));
+    expect(s.agents.get("otter")?.status).toBe("done");
+    const after = reduce(s, { type: "dismiss", session: "otter" });
+    expect(after.agents.has("otter")).toBe(false);
+  });
+
+  it("leaves the other agents alone", () => {
+    const s = apply(initialState, ev(card("otter")), ev(card("lynx")));
+    const after = reduce(s, { type: "dismiss", session: "otter" });
+    expect([...after.agents.keys()]).toEqual(["lynx"]);
+  });
+
+  it("is a no-op for a session nobody knows about", () => {
+    const s = apply(initialState, ev(card("otter")));
+    expect(reduce(s, { type: "dismiss", session: "nobody" })).toBe(s);
+  });
+
+  it("does not count as stream traffic and leaves the transcript intact", () => {
+    const s = apply(initialState, ev(card("otter")), ev(chunk("otter", "hi")));
+    const after = reduce(s, { type: "dismiss", session: "otter" });
+    expect(after.streamMsgCount).toBe(s.streamMsgCount);
+    expect(after.chat).toBe(s.chat);
+  });
+
+  // Nothing on the bus retires a tap any more: a closed pod stays greyed out
+  // until the user clears it, which is what keeps its replay available.
+  it("is the only thing that removes a closed agent", () => {
+    const s = apply(initialState, ev(card("otter")), ev(closed("otter")));
+    expect(reduce(s, { type: "tick", now: 10_000_000 }).agents.has("otter")).toBe(true);
+    expect(reduce(s, { type: "dismiss", session: "otter" }).agents.has("otter")).toBe(false);
+  });
+});
+
+describe("excerptOf", () => {
+  it("takes the first line only", () => {
+    expect(excerptOf("first line\nsecond line")).toBe("first line");
+  });
+
+  it("collapses whitespace and trims", () => {
+    expect(excerptOf("  a   b\tc  ")).toBe("a b c");
+  });
+
+  it("strips control characters", () => {
+    expect(excerptOf("a\u0007b\u001fc")).toBe("a b c");
+  });
+
+  it("elides past 80 characters", () => {
+    const out = excerptOf("x".repeat(200));
+    expect(out).toHaveLength(80);
+    expect(out.endsWith("…")).toBe(true);
+  });
+
+  it("returns the empty string for blank text", () => {
+    expect(excerptOf("   \n  ")).toBe("");
+  });
+
+  it("keeps hyphens and punctuation intact", () => {
+    expect(excerptOf("well-known: a/b (c)")).toBe("well-known: a/b (c)");
+  });
+});
+
+describe("reduce: pulse excerpts", () => {
+  it("records the first line of a message-chunk on its pulse", () => {
+    const s = apply(initialState, ev(chunk("otter", "reading the spec\nthen more")));
+    expect(s.pulses[0].excerpt).toBe("reading the spec");
+  });
+
+  it("records the prompt of a task", () => {
+    const s = apply(initialState, ev(submission("what is otter doing?")));
+    expect(s.pulses[0].excerpt).toBe("what is otter doing?");
+  });
+
+  it("records artifact text", () => {
+    const s = apply(initialState, ev(artifact("otter", "the answer")));
+    expect(s.pulses[0].excerpt).toBe("the answer");
+  });
+
+  it("leaves the excerpt off envelopes that carry no text", () => {
+    const s = apply(initialState, ev(card("otter")), ev(status("otter", "working", false)));
+    expect(s.pulses.every((p) => p.excerpt === undefined)).toBe(true);
   });
 });
 

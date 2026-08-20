@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ChatEntry } from "./model.ts";
 import { corrColor } from "./model.ts";
+import Markdown from "./markdown.tsx";
 
 interface ChatProps {
   entries: ChatEntry[];
@@ -10,16 +11,28 @@ interface ChatProps {
 /**
  * Transcript pane: auto-scroll pinned to bottom unless user scrolled up.
  * Entries rendered by kind:
- * - user: right-aligned or "you>" prefix
+ * - user: "you>" prefix
  * - chatops: plain text
- * - delegate: "[session]" prefix, colored by session
- * - progress: dimmer with ⏳ glyph
+ * - delegate: "[session]" prefix
+ * - progress: dimmer with ⏳ glyph — deliberate milestones, one line each
+ * - thinking: one collapsed twisty per agent-task, pinned where the reasoning
+ *   started and updated in place, so two agents thinking at once read as two
+ *   quiet instruments rather than one shuffled deck
+ *
  * Each exchange group gets one correlation chip colored by corrColor(corrId).
  */
 export default function Chat({ entries, onPublishChat }: ChatProps) {
   const [text, setText] = useState("");
   const containerRef = useRef<HTMLDivElement>(null);
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+
+  const toggle = (id: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
 
   // Track scroll position to know if user scrolled up
   const handleScroll = () => {
@@ -74,25 +87,63 @@ export default function Chat({ entries, onPublishChat }: ChatProps) {
           <span>{entry.text}</span>
         </div>
       );
+    } else if (entry.kind === "thinking") {
+      const open = expanded.has(entry.id);
+      const lines = entry.lines ?? [];
+      content = (
+        <div className={`chat-entry chat-thinking${open ? " is-open" : ""}`}>
+          <button
+            type="button"
+            className="thinking-row"
+            aria-expanded={open}
+            aria-label={`Thinking log for ${entry.session ?? "agent"}`}
+            onClick={() => toggle(entry.id)}
+          >
+            <span className="thinking-twisty" aria-hidden="true">
+              {open ? "▾" : "▸"}
+            </span>
+            <span className="thinking-who">[{entry.session}]</span>
+            <span className="thinking-tag">[thinking]</span>
+            <span className="thinking-latest">
+              <Markdown text={entry.latest ?? ""} />
+            </span>
+          </button>
+          {open && (
+            <div className="thinking-log">
+              {lines.map((line, i) => (
+                <div className="thinking-line" key={i}>
+                  <Markdown text={line} />
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
     } else if (entry.kind === "user") {
       content = (
         <div className="chat-entry chat-user">
           <span>{glyphs.user}</span>
-          <span>{entry.text}</span>
+          <span>
+            <Markdown text={entry.text} />
+          </span>
         </div>
       );
     } else if (entry.kind === "delegate") {
       content = (
         <div className="chat-entry chat-delegate">
           <span>{glyphs.delegate}</span>
-          <span>{entry.text}</span>
+          <span>
+            <Markdown text={entry.text} />
+          </span>
         </div>
       );
     } else {
       // chatops
       content = (
         <div className="chat-entry chat-chatops">
-          <span>{entry.text}</span>
+          <span>
+            <Markdown text={entry.text} />
+          </span>
         </div>
       );
     }

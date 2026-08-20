@@ -8,7 +8,7 @@
  * down the trace in the order it first spoke.
  */
 import type { EnvelopeKind } from "@a2a-demo/protocol/src/envelope.ts";
-import { CHATOPS_SESSION, WEB_SESSION, type UiState } from "./model.ts";
+import { CHATOPS_SESSION, WEB_SESSION, excerptOf, type UiState } from "./model.ts";
 
 /** Clear space at each end of the trace. */
 export const RAIL_PAD_LEFT = 64;
@@ -95,6 +95,12 @@ export interface GhostStep {
   /** Short label for the timeline strip, e.g. `status · completed`. */
   label: string;
   correlationId: string;
+  /**
+   * The first line of what this step actually carried, if it carried text.
+   * A replay of eleven identical `chunk` chips says nothing; the excerpt is
+   * what turns the strip back into a readable trace.
+   */
+  excerpt?: string;
 }
 
 const KIND_LABEL: Record<EnvelopeKind, string> = {
@@ -119,6 +125,7 @@ export function buildGhost(state: UiState, session: string): GhostStep[] {
       kind: p.kind,
       label: KIND_LABEL[p.kind],
       correlationId: p.correlationId,
+      excerpt: p.excerpt,
     }));
   // The tail, not the head: the last thing a task did — the terminal status —
   // is the point of replaying it.
@@ -140,6 +147,7 @@ export function buildGhost(state: UiState, session: string): GhostStep[] {
         kind: "message-chunk",
         label: entry.kind === "progress" ? "chunk · progress" : "chunk",
         correlationId: corr,
+        excerpt: excerptOf(entry.text) || undefined,
       });
     }
     for (const artifact of task.artifacts) {
@@ -147,6 +155,12 @@ export function buildGhost(state: UiState, session: string): GhostStep[] {
         kind: "artifact-update",
         label: `artifact · ${artifact.name ?? artifact.artifactId}`,
         correlationId: corr,
+        excerpt:
+          excerptOf(
+            (artifact.parts ?? [])
+              .map((p) => (p as { text?: string }).text ?? "")
+              .join(""),
+          ) || undefined,
       });
     }
     steps.push({ kind: "status-update", label: `status · ${task.state}`, correlationId: corr });
