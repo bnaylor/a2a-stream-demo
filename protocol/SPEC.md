@@ -17,10 +17,10 @@ Note: Heartbeats are core NATS, outside the stream.
 
 | Pattern | Purpose |
 |---------|---------|
-| `a2a.tasks.{taskId}.commands` | Agent receives task assignments and directives |
-| `a2a.tasks.{taskId}.events` | Agent publishes status updates and completion events |
-| `a2a.agents.{agentType}.heartbeats` | Periodic liveness signals from agents |
-| `a2a.stream.{streamId}.messages` | Application-level message interchange |
+| `a2a.tasks.{taskId}.request` | Task submission (one message) |
+| `a2a.tasks.{taskId}.events` | Status updates, streamed message chunks, artifacts, terminal event from executing agent |
+| `a2a.agents.{session}` | Agent card published once on startup, closing tombstone on shutdown |
+| `agents.hb.{agentType}.{owner}.{session}` | Core-NATS heartbeat every 15 s (outside the A2A stream) |
 
 ## Envelope
 
@@ -53,7 +53,7 @@ A terminal status-update carries `final: true`. Status queries are answered by r
 
 ## Heartbeats
 
-Heartbeats are published to `a2a.agents.{agentType}.heartbeats` at 15 second intervals.
+Heartbeats are published to `agents.hb.{agentType}.{owner}.{session}` at 15 second intervals. They are core-NATS messages, outside the A2A stream.
 
 Heartbeat payload example:
 

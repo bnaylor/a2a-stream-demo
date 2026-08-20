@@ -68,8 +68,12 @@ await publishEnvelope(nc, taskRequestSubject(taskId), makeEnvelope({
 }));
 await runWorker(taskId, contextId, correlationId);
 
-await Promise.race([done, new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 10_000))])
-  .catch((e) => fail(`no terminal event within 10s: ${e}`));
+let timeoutId: ReturnType<typeof setTimeout>;
+await Promise.race([done, new Promise((_, rej) => {
+  timeoutId = setTimeout(() => rej(new Error("timeout")), 10_000);
+})])
+  .catch((e) => fail(`no terminal event within 10s: ${e}`))
+  .finally(() => clearTimeout(timeoutId));
 stopSub();
 stopHb();
 

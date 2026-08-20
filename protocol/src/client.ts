@@ -50,11 +50,14 @@ export async function subscribeTaskEvents(
   const sub = await nc.jetstream().subscribe(taskEventsSubject(taskId), opts);
   (async () => {
     for await (const m of sub) {
+      let env: Envelope;
       try {
-        onEnvelope(parseEnvelope(m.data));
+        env = parseEnvelope(m.data);
       } catch {
         // Skip malformed envelopes
+        continue;
       }
+      onEnvelope(env);
     }
   })().catch(() => { /* subscription closed */ });
   return () => sub.unsubscribe();
