@@ -16,6 +16,10 @@ export interface EnvelopeFrom {
   agentType: string;
 }
 
+export interface EnvelopeTo {
+  session: string;
+}
+
 export interface Envelope<P = unknown> {
   protocol: typeof PROTOCOL_VERSION;
   correlationId: string;
@@ -23,6 +27,7 @@ export interface Envelope<P = unknown> {
   contextId?: string;
   ts: string;
   from: EnvelopeFrom;
+  to?: EnvelopeTo;
   kind: EnvelopeKind;
   payload: P;
 }
@@ -36,6 +41,7 @@ export interface MakeEnvelopeInput<P> {
   payload: P;
   taskId?: string;
   contextId?: string;
+  to?: EnvelopeTo;
 }
 
 export function makeEnvelope<P>(input: MakeEnvelopeInput<P>): Envelope<P> {
@@ -49,6 +55,7 @@ export function makeEnvelope<P>(input: MakeEnvelopeInput<P>): Envelope<P> {
     contextId: input.contextId,
     ts: new Date().toISOString(),
     from: input.from,
+    to: input.to,
     kind: input.kind,
     payload: input.payload,
   };
@@ -81,6 +88,8 @@ export function parseEnvelope(data: Uint8Array | string): Envelope {
   if (TASK_SCOPED.includes(kind) && (typeof e.taskId !== "string" || typeof e.contextId !== "string")) {
     throw new EnvelopeError(`kind ${kind} requires taskId and contextId`);
   }
+  const toRaw = e.to as Record<string, unknown> | undefined;
+  const to = typeof toRaw?.session === "string" ? { session: toRaw.session } : undefined;
   return {
     protocol: PROTOCOL_VERSION,
     correlationId: e.correlationId,
@@ -88,6 +97,7 @@ export function parseEnvelope(data: Uint8Array | string): Envelope {
     contextId: e.contextId as string | undefined,
     ts: e.ts,
     from: { session: from.session, agentType: from.agentType },
+    to,
     kind,
     payload: e.payload,
   };

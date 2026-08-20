@@ -34,6 +34,7 @@ All messages conform to this structure:
   "contextId": "ctx-…",
   "ts": "2026-08-19T21:00:00Z",
   "from": { "session": "worker-brisk-otter", "agentType": "claude-code" },
+  "to": { "session": "chatops" },
   "kind": "task | status-update | message-chunk | artifact-update | agent-card | agent-closed",
   "payload": { }
 }
@@ -44,6 +45,7 @@ All messages conform to this structure:
 - **taskId** / **contextId**: Required for kinds `task`, `status-update`, `message-chunk`, `artifact-update`. Optional for `agent-card`, `agent-closed`.
 - **ts**: ISO-8601 UTC timestamp.
 - **kind**: Enum: `task | status-update | message-chunk | artifact-update | agent-card | agent-closed`.
+- **to**: Optional. Addresses a task envelope to a named session; consumers watching the request wildcard MUST ignore envelopes addressed elsewhere.
 
 ## Lifecycle
 
