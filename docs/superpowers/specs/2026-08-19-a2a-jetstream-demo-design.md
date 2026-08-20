@@ -28,7 +28,8 @@ without auth; that is accepted for this demo.
   v1.35.x. There is **no GKE** in play for this demo — GKE is the
   later overlay only.
 - **Isolation rules:** everything lives in namespace `a2a-demo`. No
-  cluster-scoped resources of any kind. Every pod has CPU/memory
+  cluster-scoped resources beyond the `a2a-demo` Namespace object
+  itself. Every pod has CPU/memory
   requests and limits. Nothing references or depends on workloads
   outside the namespace.
 - **NATS:** we deploy our own single-node NATS inside `a2a-demo`

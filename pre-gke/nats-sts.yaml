@@ -20,7 +20,6 @@ spec:
           args:
             - -c
             - /etc/nats/nats.conf
-            - -js
           ports:
             - name: client
               containerPort: 4222
