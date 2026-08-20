@@ -185,6 +185,75 @@ describe("Rail", () => {
   });
 });
 
+// The user's report: "the active agent's current line is rendered directly
+// underneath it, overlaps other text, and doesn't go away or change".
+describe("Rail: tap status lines", () => {
+  const progress = (session: string, note: string) =>
+    ev(chunk(session, `[progress] ${note}`, "t1"));
+
+  it("shows the live progress milestone while the worker runs", () => {
+    const s = [ev(card("chatops")), ev(card("otter")), progress("otter", "Fetched 2 of 4")].reduce(
+      reduce,
+      initialState,
+    );
+    render(<Rail state={s} />);
+    expect(screen.getByText("Fetched 2 of 4")).toBeDefined();
+  });
+
+  it("replaces it with the lifecycle state once the worker is done", () => {
+    const s = [
+      ev(card("chatops")),
+      ev(card("otter")),
+      progress("otter", "Fetched 2 of 4"),
+      ev(status("otter", "completed", true)),
+    ].reduce(reduce, initialState);
+    render(<Rail state={s} />);
+    expect(screen.queryByText("Fetched 2 of 4")).toBeNull();
+    expect(screen.getByText("done")).toBeDefined();
+  });
+
+  it("replaces it with closed once the pod goes away", () => {
+    const s = [
+      ev(card("chatops")),
+      ev(card("otter")),
+      progress("otter", "Fetched 2 of 4"),
+      ev(closedCard("otter")),
+    ].reduce(reduce, initialState);
+    render(<Rail state={s} />);
+    expect(screen.queryByText("Fetched 2 of 4")).toBeNull();
+    expect(screen.getByText("closed")).toBeDefined();
+  });
+
+  // Unclipped, a worker-authored milestone runs straight through the labels of
+  // the taps either side of it.
+  it("clips an overlong milestone to the tap's own slot", () => {
+    const long =
+      "Starting research: what's a good place for brunch in Toronto on the weekends with parking";
+    const s = [ev(card("chatops")), ev(card("otter")), ev(card("lynx")), progress("otter", long)]
+      .reduce(reduce, initialState);
+    const { container } = render(<Rail state={s} />);
+    const status_ = Array.from(container.querySelectorAll(".tap-status")).map((n) => n.textContent ?? "");
+    const shown = status_.find((t) => t.startsWith("Starting research"));
+    expect(shown).toBeDefined();
+    expect(shown!.length).toBeLessThan(long.length);
+    expect(shown!.endsWith("…")).toBe(true);
+    // Nothing on the rail may be wider than the slot it sits in.
+    for (const t of status_) expect(t.length).toBeLessThanOrEqual(32);
+  });
+
+  it("never shows thinking text on the rail", () => {
+    const s = [
+      ev(card("chatops")),
+      ev(card("otter")),
+      ev(chunk("otter", "[thinking] Parking is the real constraint here", "t1")),
+    ].reduce(reduce, initialState);
+    const { container } = render(<Rail state={s} />);
+    const status_ = Array.from(container.querySelectorAll(".tap-status")).map((n) => n.textContent ?? "");
+    expect(status_.some((t) => t.includes("Parking"))).toBe(false);
+    expect(status_).toContain("working");
+  });
+});
+
 // Terminal taps used to fade off the rail on a two-second timer, which took
 // their ghost replay with them — the reason replay "sometimes" wasn't there.
 describe("Rail: terminal taps", () => {

@@ -110,7 +110,11 @@ export default function Chat({ entries, onPublishChat }: ChatProps) {
             <span className="thinking-who">[{entry.session}]</span>
             <span className="thinking-tag">[thinking]</span>
             <span className="thinking-latest">
-              <Markdown text={entry.latest ?? ""} />
+              {/* A twisty with nothing in it yet still says what it is. The
+                  reducer will not open one for an empty thinking block, but a
+                  run whose first fragments are all whitespace can still land
+                  here for a frame or two. */}
+              {entry.latest ? <Markdown text={entry.latest} /> : "thinking…"}
             </span>
           </button>
           {open && (

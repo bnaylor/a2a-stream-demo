@@ -19,10 +19,16 @@ export const WEB_SESSION = "you";
 export const PROGRESS_PREFIX = "[progress] ";
 /**
  * Extended-thinking deltas ride the chat stream behind this marker (see
- * `agents/common/src/mapper.ts`). Every delta carries the prefix, so the
- * reducer can pull the whole class of them out of the transcript.
+ * `agents/common/src/mapper.ts`, which is the source of truth for the shape).
+ * The mapper stamps it on EVERY delta individually, so a token stream looks
+ * like `"[thinking] Let"`, `"[thinking]  me"`, `"[thinking]  think"` — the
+ * marker is a per-fragment boundary, not a one-time header.
  */
 export const THINKING_PREFIX = "[thinking] ";
+/** The marker without its trailing space, which an empty delta will not have. */
+const THINKING_MARKER = "[thinking]";
+/** Every marker inside a run of concatenated fragments is a boundary. */
+const THINKING_MARKER_RE = /\[thinking\] ?/g;
 /** Longest line the rail's replay peek will show before it is elided. */
 export const EXCERPT_MAX = 80;
 /** No heartbeat for longer than this and an agent is presumed wedged. */
@@ -162,6 +168,22 @@ function chunkText(env: Envelope): string {
   return parts.map((p) => p.text ?? "").join("");
 }
 
+/**
+ * Splits a chunk into the part that belongs in the transcript and the part
+ * that belongs in a thinking twisty.
+ *
+ * The marker is only honoured at position 0 — that is the mapper's guarantee,
+ * and it means a worker whose prose happens to contain the literal
+ * `[thinking]` keeps it as text instead of having its sentence swallowed.
+ * Once a chunk *is* a thinking chunk, every further marker inside it is a
+ * fragment boundary from concatenated deltas and is stripped, so no marked
+ * text can leak into a plain entry however it was batched upstream.
+ */
+export function partitionThinking(text: string): { plain: string; thinking: string | null } {
+  if (!text.startsWith(THINKING_MARKER)) return { plain: text, thinking: null };
+  return { plain: "", thinking: text.replace(THINKING_MARKER_RE, "") };
+}
+
 /** What a pulse can say about itself on the replay strip, if anything. */
 function envelopeExcerpt(env: Envelope): string | undefined {
   switch (env.kind) {
@@ -281,6 +303,17 @@ function latestLine(lines: readonly string[]): string {
   return "";
 }
 
+/** Index of this agent-task's twisty, or -1 before it has one. */
+function thinkingIndex(chat: readonly ChatEntry[], session: string, taskId?: string): number {
+  return chat.findIndex(
+    (e) => e.kind === "thinking" && e.session === session && e.taskId === taskId,
+  );
+}
+
+function hasThinking(state: UiState, session: string, taskId?: string): boolean {
+  return thinkingIndex(state.chat, session, taskId) >= 0;
+}
+
 /**
  * One accumulating entry per (session, task), pinned at the point in the
  * transcript where that agent started thinking. Everything after that updates
@@ -288,9 +321,7 @@ function latestLine(lines: readonly string[]): string {
  * two agents thinking at once now update two twisties, not one shuffled deck.
  */
 function appendThinking(state: UiState, entry: Omit<ChatEntry, "id">, delta: string): ChatEntry[] {
-  const at = state.chat.findIndex(
-    (e) => e.kind === "thinking" && e.session === entry.session && e.taskId === entry.taskId,
-  );
+  const at = thinkingIndex(state.chat, entry.session ?? "", entry.taskId);
   const prev = at >= 0 ? state.chat[at] : undefined;
   const grown = mergeThinkingLines(prev?.lines ?? [], delta);
   const trimmed = trimThinkingLines(grown);
@@ -351,6 +382,7 @@ function reduceEnvelope(state: UiState, env: Envelope, live: boolean): UiState {
         agentType: env.from.agentType,
         ...prev,
         status: "closed",
+        statusLine: undefined,
       });
       next.agents = agents;
       break;
@@ -382,7 +414,13 @@ function reduceEnvelope(state: UiState, env: Envelope, live: boolean): UiState {
       const text = chunkText(env);
       // Reasoning is not transcript. Everyone's thinking — ChatOps' included —
       // collects behind a twisty instead of interleaving line by line.
-      if (text.startsWith(THINKING_PREFIX)) {
+      const { thinking } = partitionThinking(text);
+      if (thinking !== null) {
+        // A thinking block whose streamed content is empty (a signature-only
+        // block opens one) must not leave an empty twisty sitting in the
+        // transcript with nothing to say. Swallow it: the marker was still
+        // consumed, so it can never fall through to a plain entry either.
+        if (thinking.trim() === "" && !hasThinking(state, session, env.taskId)) break;
         next.chat = appendThinking(
           state,
           {
@@ -392,7 +430,7 @@ function reduceEnvelope(state: UiState, env: Envelope, live: boolean): UiState {
             correlationId: env.correlationId,
             taskId: env.taskId,
           },
-          text.slice(THINKING_PREFIX.length),
+          thinking,
         );
         break;
       }
@@ -438,7 +476,12 @@ function reduceEnvelope(state: UiState, env: Envelope, live: boolean): UiState {
       if (terminal && session !== CHATOPS_SESSION) {
         const prev = state.agents.get(session);
         if (prev && prev.status !== "closed") {
-          next.agents = withAgent(state.agents, session, { status: "done" });
+          // The last milestone goes with it: a finished tap reports the state
+          // it finished in, not what it was doing several seconds ago.
+          next.agents = withAgent(state.agents, session, {
+            status: "done",
+            statusLine: undefined,
+          });
         }
       }
       break;

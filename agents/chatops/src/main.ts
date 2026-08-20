@@ -34,10 +34,10 @@ if (missingAuth.length > 0) {
 
 const natsUrl = need("NATS_URL");
 const workerImage = need("WORKER_IMAGE");
-const model = process.env.CHATOPS_MODEL ?? "claude-sonnet-5";
+const model = process.env.CHATOPS_MODEL ?? "claude-haiku-4-5";
 const namespace = process.env.NAMESPACE ?? "a2a-demo";
 const secretName = process.env.SECRET_NAME ?? "a2a-demo-secrets";
-const workerModel = process.env.WORKER_MODEL ?? "claude-sonnet-5";
+const workerModel = process.env.WORKER_MODEL ?? "claude-haiku-4-5";
 const workerMaxBudgetUsd = process.env.WORKER_MAX_BUDGET_USD ?? "1.50";
 const OWN_SESSION = "chatops";
 const SWEEP_INTERVAL_MS = 60_000;

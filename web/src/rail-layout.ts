@@ -27,6 +27,43 @@ const MIN_GAP_SCALE = 0.45;
 /** A ghost replay longer than this stops being legible and starts being a wait. */
 export const MAX_GHOST_STEPS = 24;
 
+/**
+ * Mono advance width at the tap-status font size (9.5px). Used to turn a slot's
+ * pixel budget into a character budget.
+ */
+export const STATUS_CHAR_PX = 5.3;
+
+/**
+ * Fits a label into `maxChars`, eliding with a single ellipsis. Below three
+ * characters there is no honest way to elide, so the label is simply cut.
+ *
+ * A tap's status line is worker-authored text of arbitrary length sitting in a
+ * fixed-width slot; unclipped it runs straight through its neighbours' labels.
+ */
+export function ellipsize(text: string, maxChars: number): string {
+  if (maxChars <= 0) return "";
+  if (text.length <= maxChars) return text;
+  if (maxChars < 2) return text.slice(0, maxChars);
+  return `${text.slice(0, maxChars - 1)}…`;
+}
+
+/**
+ * How much room each tap has for its labels. Labels are centred on the tap, so
+ * a tap may use half the gap to each neighbour and no more — that is what stops
+ * two labels claiming the same pixels. The end taps run out into the rail's
+ * padding instead of into a neighbour.
+ */
+export function slotWidths(taps: readonly TapPosition[], railWidth: number): Map<string, number> {
+  const widths = new Map<string, number>();
+  taps.forEach((tap, i) => {
+    const left = i > 0 ? tap.x - taps[i - 1].x : tap.x * 2;
+    const right = i < taps.length - 1 ? taps[i + 1].x - tap.x : (railWidth - tap.x) * 2;
+    // The tighter of the two gaps, less a hair of breathing room.
+    widths.set(tap.session, Math.max(0, Math.min(left, right) - 8));
+  });
+  return widths;
+}
+
 export type TapKind = "you" | "chatops" | "worker";
 
 /** Structural: any list of things with a session name can be laid out. */

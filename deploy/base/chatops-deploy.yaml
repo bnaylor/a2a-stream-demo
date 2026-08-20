@@ -41,9 +41,9 @@ spec:
                   name: a2a-demo-secrets
                   key: ANTHROPIC_API_KEY
                   optional: true
-            # ChatOps model (defaults to claude-sonnet-5 if not set).
+            # ChatOps model (defaults to claude-haiku-4-5 if not set).
             - name: CHATOPS_MODEL
-              value: "claude-sonnet-5"
+              value: "claude-haiku-4-5"
             # Worker pod image. Rewritten by the same `images:` transformer as
             # the container image above, via kustomizeconfig/images.yaml.
             - name: WORKER_IMAGE
@@ -51,7 +51,7 @@ spec:
             # Worker model (sonnet: haiku finished research tasks too fast to
             # watch, and the extra depth is worth the cost here).
             - name: WORKER_MODEL
-              value: "claude-sonnet-5"
+              value: "claude-haiku-4-5"
             # Worker max budget (USD per task).
             - name: WORKER_MAX_BUDGET_USD
               value: "1.50"

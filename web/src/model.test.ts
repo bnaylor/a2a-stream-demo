@@ -8,6 +8,7 @@ import {
   corrColor,
   excerptOf,
   initialState,
+  partitionThinking,
   reduce,
 } from "./model.ts";
 
@@ -564,6 +565,170 @@ describe("reduce: thinking", () => {
     const s = apply(initialState, ev(chunk("otter", "here is the answer")));
     expect(s.chat[0]).toMatchObject({ kind: "delegate", text: "here is the answer" });
     expect(s.chat[0].lines).toBeUndefined();
+  });
+});
+
+/**
+ * These pin the reducer to the shapes `agents/common/src/mapper.ts` actually
+ * puts on the wire — that file is the source of truth and is deliberately NOT
+ * imported here (the web bundle must not reach into the agents workspace), so
+ * the shapes are replicated as literals. If the mapper's marker or its
+ * per-delta framing changes, these are the tests that should fail.
+ *
+ * The shape that matters: `mapSdkMessage` emits ONE `message-chunk` per
+ * `thinking_delta`, each with `parts: [{ kind: "text", text: "[thinking] " +
+ * fragment }]`. The marker is stamped on every fragment, not once per block.
+ */
+describe("reduce: real mapper delta shapes", () => {
+  /** Exactly what the mapper produces for one thinking_delta. */
+  const mapperThinking = (session: string, fragment: string, taskId = TASK) =>
+    ev(chunk(session, `[thinking] ${fragment}`, taskId));
+  /** Exactly what the mapper produces for one text_delta. */
+  const mapperText = (session: string, fragment: string, taskId = TASK) =>
+    ev(chunk(session, fragment, taskId));
+
+  it("accumulates a per-fragment-prefixed token stream into one twisty", () => {
+    // "Let", " me", " think" — the marker repeats on every fragment.
+    const s = apply(
+      initialState,
+      mapperThinking("otter", "Let"),
+      mapperThinking("otter", " me"),
+      mapperThinking("otter", " think"),
+    );
+    expect(s.chat).toHaveLength(1);
+    expect(s.chat[0].kind).toBe("thinking");
+    expect(s.chat[0].latest).toBe("Let me think");
+    // The marker itself never survives into the accumulated text.
+    expect(s.chat[0].text).not.toContain("[thinking]");
+  });
+
+  it("keeps the twisty updating live, entry by entry", () => {
+    let s = reduce(initialState, mapperThinking("otter", "Reading"));
+    expect(s.chat[0].latest).toBe("Reading");
+    s = reduce(s, mapperThinking("otter", " the spec"));
+    expect(s.chat[0].latest).toBe("Reading the spec");
+    expect(s.chat).toHaveLength(1);
+  });
+
+  // A signature-only thinking block streams no text. It used to open a twisty
+  // that then sat in the transcript with nothing in it for the whole run.
+  it("does not open a twisty for a thinking block with no content", () => {
+    const s = apply(initialState, ev(chunk("otter", "[thinking] ")));
+    expect(s.chat).toHaveLength(0);
+  });
+
+  it("still swallows the empty marker rather than showing it as output", () => {
+    const s = apply(initialState, ev(chunk("otter", "[thinking]")));
+    expect(s.chat).toHaveLength(0);
+  });
+
+  it("opens the twisty as soon as content does arrive", () => {
+    const s = apply(
+      initialState,
+      ev(chunk("otter", "[thinking] ")),
+      mapperThinking("otter", "now I have something"),
+    );
+    expect(s.chat).toHaveLength(1);
+    expect(s.chat[0]).toMatchObject({ kind: "thinking", latest: "now I have something" });
+  });
+
+  it("routes fragments batched into one chunk entirely into the twisty", () => {
+    // Anything that concatenates mapper fragments yields embedded markers;
+    // none of them may leak into a plain entry.
+    const s = apply(initialState, ev(chunk("otter", "[thinking] Let[thinking]  me[thinking]  go")));
+    expect(s.chat).toHaveLength(1);
+    expect(s.chat[0].kind).toBe("thinking");
+    expect(s.chat[0].latest).toBe("Let me go");
+  });
+
+  it("leaves the literal word in ordinary prose alone", () => {
+    // The marker is only a marker at position 0 — a worker writing about the
+    // demo must not have its sentence eaten.
+    const s = apply(initialState, mapperText("otter", "the UI shows a [thinking] twisty"));
+    expect(s.chat[0]).toMatchObject({ kind: "delegate", text: "the UI shows a [thinking] twisty" });
+  });
+
+  it("never lets thinking text reach the rail's status line", () => {
+    const s = apply(
+      initialState,
+      ev(card("otter")),
+      mapperThinking("otter", "I should check the parking situation first"),
+    );
+    expect(s.agents.get("otter")?.statusLine).toBeUndefined();
+  });
+
+  // Documents a wire-level limit rather than a defect: a model without
+  // extended thinking emits its reasoning as text_delta, which the mapper does
+  // not mark, so the reducer cannot tell it from the deliverable.
+  it("treats unmarked text_delta prose as delegate output", () => {
+    const s = apply(initialState, mapperText("otter", "Let me think about what the user wants."));
+    expect(s.chat[0].kind).toBe("delegate");
+  });
+});
+
+describe("reduce: the rail status line", () => {
+  it("tracks the latest progress milestone while the worker runs", () => {
+    const s = apply(
+      initialState,
+      ev(card("otter")),
+      ev(chunk("otter", "[progress] one")),
+      ev(chunk("otter", "[progress] two")),
+    );
+    expect(s.agents.get("otter")?.statusLine).toBe("two");
+  });
+
+  // A finished pod reporting "Fetched 2 of 4 sources" looks busy forever.
+  it("clears on a terminal status-update", () => {
+    const s = apply(
+      initialState,
+      ev(card("otter")),
+      ev(chunk("otter", "[progress] fetching sources")),
+      ev(status("otter", "completed", true)),
+    );
+    expect(s.agents.get("otter")).toMatchObject({ status: "done" });
+    expect(s.agents.get("otter")?.statusLine).toBeUndefined();
+  });
+
+  it("clears on agent-closed", () => {
+    const s = apply(
+      initialState,
+      ev(card("otter")),
+      ev(chunk("otter", "[progress] fetching sources")),
+      ev(closed("otter")),
+    );
+    expect(s.agents.get("otter")).toMatchObject({ status: "closed" });
+    expect(s.agents.get("otter")?.statusLine).toBeUndefined();
+  });
+
+  it("leaves the long-lived chatops agent's line alone on its own terminal turns", () => {
+    const s = apply(
+      initialState,
+      ev(card("chatops")),
+      ev(status("chatops", "completed", true)),
+    );
+    expect(s.agents.get("chatops")?.status).toBe("live");
+  });
+});
+
+describe("partitionThinking", () => {
+  it("splits a marked chunk into no plain text and the fragment", () => {
+    expect(partitionThinking("[thinking] hello")).toEqual({ plain: "", thinking: "hello" });
+  });
+
+  it("strips every embedded marker from a batched run", () => {
+    expect(partitionThinking("[thinking] a[thinking] b").thinking).toBe("ab");
+  });
+
+  it("reports unmarked text as plain", () => {
+    expect(partitionThinking("just output")).toEqual({ plain: "just output", thinking: null });
+  });
+
+  it("only honours the marker at position 0", () => {
+    expect(partitionThinking("see the [thinking] marker").thinking).toBeNull();
+  });
+
+  it("handles the marker with no trailing space or content", () => {
+    expect(partitionThinking("[thinking]")).toEqual({ plain: "", thinking: "" });
   });
 });
 
