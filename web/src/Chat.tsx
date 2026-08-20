@@ -61,6 +61,7 @@ export default function Chat({ entries, onPublishChat }: ChatProps) {
         className="corr-chip"
         style={{ backgroundColor: corrColor(entry.correlationId) }}
         title={`Correlation: ${entry.correlationId.slice(0, 8)}...`}
+        data-corr={entry.correlationId}
       />
     ) : null;
 

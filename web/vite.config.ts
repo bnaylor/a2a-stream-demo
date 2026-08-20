@@ -6,4 +6,8 @@ export default defineConfig({
   build: {
     outDir: "dist",
   },
+  test: {
+    environment: "node",
+    environmentMatchGlobs: [["**/*.test.tsx", "jsdom"]],
+  },
 });
