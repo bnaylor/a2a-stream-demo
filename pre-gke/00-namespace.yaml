@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: a2a-demo
+  labels:
+    name: a2a-demo
+    # Demo-only. Nothing in this namespace is prod.

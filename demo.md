@@ -26,7 +26,7 @@ This defines and supports a way to delegate tasks to an agent, subscribe to resu
 
 I want to build a demo to show how this can work before we go all the way down the road of revamping the whole architecture.  The basic idea:
 
-1. The cluster testbed will be a Kubernetes (k8s) cluster in GKE.
+1. The cluster testbed will be the homelab microk8s cluster (dusty/lucky/ned, containerd) — **not** GKE. A GKE overlay is a later, separate phase (see the design spec §2).
 2. Install NATS server in this cluster.
 3. Define a k8s manifest that creates a "ChatOps" pod that runs a Claude Code instance that has been taught to use this A2A protocol and has NATS client access, registers with the bus.
 4. This agent has access to the k8s api server with sufficient permissions to create new pods in its own namespace.

@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chatops
+  namespace: a2a-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: chatops
+  template:
+    metadata:
+      labels:
+        app: chatops
+    spec:
+      serviceAccountName: chatops
+      containers:
+        - name: chatops
+          # PLACEHOLDER — built and pushed by rune:
+          #   docker build -t 10.3.10.52:5000/a2a-demo/chatops:latest agents/chatops
+          #   docker push 10.3.10.52:5000/a2a-demo/chatops:latest
+          image: 10.3.10.52:5000/a2a-demo/chatops:latest
+          imagePullPolicy: Always
+          env:
+            # NATS URL for the in-cluster client port (not the NodePort).
+            - name: NATS_URL
+              value: "nats://nats:4222"
+            # API key comes from a Secret created out-of-band (never committed).
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: a2a-demo-secrets
+                  key: ANTHROPIC_API_KEY
+            # k8s API access is via the mounted service account token (in-cluster).
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi

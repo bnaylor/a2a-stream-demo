@@ -1,0 +1,26 @@
+# pre-gke — throwaway local manifests
+
+Scratch space for the homelab (microk8s) iteration of the A2A demo,
+before any GKE overlay exists.
+
+**Why this exists:** rune builds/pushes the demo images and iterates on
+the k8s manifests. Committing them here lets rune and scromp transfer
+files and review fixes via git instead of scp.
+
+**Rules:**
+
+- **No secrets.** `ANTHROPIC_API_KEY` (and anything else sensitive) lives
+  in a k8s Secret created out-of-band — never committed here.
+- This is **throwaway**. Once `deploy/overlays/gke` (or a proper
+  `deploy/base` + `deploy/overlays/local` tree) exists, this directory
+  is deleted.
+- Everything is namespaced `a2a-demo`; no cluster-scoped resources.
+
+**Environment facts (verified against the live cluster):**
+
+- Cluster: microk8s, nodes `dusty` 10.3.10.4 / `lucky` 10.3.10.2 /
+  `ned` 10.3.10.3, containerd.
+- Image registry: `10.3.10.52:5000` (a.k.a. `registry.naylo.rs`), plain
+  HTTP/insecure — use the IP form.
+- LAN reachability: NodePort (MetalLB pool `10.3.10.50–60` is nearly
+  full; only `.60` free).
