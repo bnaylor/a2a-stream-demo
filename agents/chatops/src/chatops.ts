@@ -40,6 +40,9 @@ const NOTICE_ARTIFACT_CHARS = 500;
 const DIGEST_TEXT_CHARS = 120;
 const DIGEST_MAX_EVENTS = 30;
 const TERMINAL_PHASES = ["Failed", "Succeeded"];
+const FENCE_SENTINEL_RE = /<\/?untrusted_worker_output[^>]*>/gi;
+/** The only states that may be rendered outside the untrusted-output fence. */
+const NOTICE_STATES = new Set(["completed", "failed", "canceled"]);
 
 function textOf(payload: unknown): string {
   const parts = (payload as { parts?: { kind: string; text?: string }[] }).parts;
@@ -52,14 +55,33 @@ function stateOf(payload: unknown): string | undefined {
 }
 
 /**
+ * Drop fence sentinels, then cap. Idempotent, so it is safe to apply both when
+ * caching an artifact and again when rendering it.
+ */
+function boundedExcerpt(text: string): string {
+  return text.replace(FENCE_SENTINEL_RE, "").slice(0, NOTICE_ARTIFACT_CHARS);
+}
+
+/**
  * Worker output is untrusted input, not instructions: fence every excerpt we
  * splice into the ChatOps prompt so a worker can't steer the agent that holds
  * pod-creation powers. `main.ts`'s system prompt states the matching rule.
+ *
+ * Two things keep the fence intact:
+ *   - the excerpt is stripped of fence sentinels and then has every angle
+ *     bracket escaped, so no worker text can close the fence or smuggle in
+ *     markup the model might read as structure;
+ *   - `state` is rendered OUTSIDE the fence, so it is validated against a
+ *     closed allowlist rather than echoed from the worker's payload.
+ * `session` is our own generated name, never worker-controlled.
  */
 function notice(session: string, state: string, artifact: string): string {
-  const excerpt = artifact.slice(0, NOTICE_ARTIFACT_CHARS);
+  const excerpt = boundedExcerpt(artifact)
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+  const safeState = NOTICE_STATES.has(state) ? state : "completed";
   return (
-    `[notice] session ${session} ${state}: ` +
+    `[notice] session ${session} ${safeState}: ` +
     `<untrusted_worker_output session="${session}">${excerpt}</untrusted_worker_output>`
   );
 }
@@ -199,7 +221,7 @@ export async function startChatOps(deps: ChatOpsDeps): Promise<ChatOpsHandle> {
       // we actually delegated to may drive this delegation's state.
       if (ev.from?.session !== session) return;
       if (ev.kind === "artifact-update") {
-        rec.artifact = textOf(ev.payload).slice(0, NOTICE_ARTIFACT_CHARS);
+        rec.artifact = boundedExcerpt(textOf(ev.payload));
         return;
       }
       if (!isFinal(ev)) return;
