@@ -1,7 +1,8 @@
 apiVersion: v1
 kind: Pod
 metadata:
-  name: worker-example
+  # ChatOps names pods a2a-worker-<session>, where <session> is a short word.
+  name: a2a-worker-otter
   namespace: a2a-demo
   labels:
     app: a2a-worker
@@ -24,7 +25,7 @@ spec:
         - name: TASK_ID
           value: "task-REPLACE"
         - name: SESSION
-          value: "worker-REPLACE"
+          value: "otter"
         - name: NATS_URL
           value: "nats://nats:4222"
         - name: CORRELATION_ID
@@ -34,12 +35,17 @@ spec:
         - name: WORKER_MODEL
           value: "claude-haiku-4-5"
         - name: WORKER_MAX_BUDGET_USD
-          value: "0.50"
+          value: "1.50"
         - name: ANTHROPIC_API_KEY
           valueFrom:
             secretKeyRef:
               name: a2a-demo-secrets
               key: ANTHROPIC_API_KEY
+      volumeMounts:
+        # Scratch space for the worker (its cwd). emptyDir: nothing survives
+        # the pod, and the worker's Write tool is scoped here.
+        - name: work
+          mountPath: /work
       resources:
         requests:
           cpu: 250m
@@ -47,3 +53,6 @@ spec:
         limits:
           cpu: "1"
           memory: 2Gi
+  volumes:
+    - name: work
+      emptyDir: {}

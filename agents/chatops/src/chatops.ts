@@ -44,6 +44,7 @@ const FENCE_SENTINEL_RE = /<\/?untrusted_worker_output[^>]*>/gi;
 /** The only states we will ever render. Anything else fails closed. */
 const NOTICE_STATES = new Set(["completed", "failed", "canceled"]);
 const UNKNOWN_STATE = "failed";
+const MAX_SESSION_ATTEMPTS = 20;
 
 function textOf(payload: unknown): string {
   const parts = (payload as { parts?: { kind: string; text?: string }[] }).parts;
@@ -53,6 +54,11 @@ function textOf(payload: unknown): string {
 
 function stateOf(payload: unknown): string | undefined {
   return (payload as { status?: { state?: string } }).status?.state;
+}
+
+/** Worker milestones published by the report_progress tool. */
+function progressOf(payload: unknown): string | undefined {
+  return (payload as { metadata?: { progress?: string } }).metadata?.progress;
 }
 
 /**
@@ -202,11 +208,31 @@ export async function startChatOps(deps: ChatOpsDeps): Promise<ChatOpsHandle> {
     }
   }
 
+  /**
+   * Session names come from a small pool of short words, so collisions are
+   * expected rather than astronomically unlikely. Reject any candidate that
+   * belongs to a delegation we are tracking or to a pod still in the cluster
+   * (which covers sessions delegated before a ChatOps restart).
+   */
+  async function mintSession(): Promise<string> {
+    const live = new Set(
+      (await deps.pods.listWorkerPods()).map((p) => p.session)
+    );
+    for (let i = 0; i < MAX_SESSION_ATTEMPTS; i++) {
+      const candidate = deps.newSessionName();
+      if (!delegations.has(candidate) && !live.has(candidate)) return candidate;
+    }
+    throw new Error(
+      `could not mint a free session name in ${MAX_SESSION_ATTEMPTS} attempts ` +
+        `(${live.size} live pods, ${delegations.size} tracked delegations)`
+    );
+  }
+
   // 2. delegate_task
   async function delegate(
     prompt: string
   ): Promise<{ taskId: string; session: string }> {
-    const session = deps.newSessionName();
+    const session = await mintSession();
     const { taskId, contextId } = deps.newIds();
     const correlationId = turnCorrelationId || contextId;
     const spec: WorkerPodSpec = { session, taskId, correlationId, contextId };
@@ -271,6 +297,10 @@ export async function startChatOps(deps: ChatOpsDeps): Promise<ChatOpsHandle> {
       const bits: string[] = [ev.kind];
       const state = stateOf(ev.payload);
       if (state) bits.push(safeState(state));
+      const progress = progressOf(ev.payload);
+      if (progress) {
+        bits.push(`progress: ${safeText(progress, DIGEST_TEXT_CHARS)}`);
+      }
       const text = safeText(textOf(ev.payload), DIGEST_TEXT_CHARS);
       if (text) bits.push(text);
       return bits.join(" ");
