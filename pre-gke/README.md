@@ -30,3 +30,12 @@ files and review fixes via git instead of scp.
   HTTP/insecure — use the IP form.
 - LAN reachability: NodePort (MetalLB pool `10.3.10.50–60` is nearly
   full; only `.60` free).
+
+## M1 handoff (rune)
+
+1. `kubectl apply -k pre-gke/` (from a microk8s-context machine — see warning above).
+   Expected ready: `nats-0` running; `chatops`/`web` will ImagePullBackOff (images land in M2/M3 — that's fine).
+2. Report back (commit to this README or PR comment):
+   - `kubectl -n a2a-demo get svc nats-client nats-ws web -o wide` → the assigned NodePorts.
+3. scromp then runs from the laptop: `NATS_URL=nats://10.3.10.4:<nats-client NodePort> npm run smoke`
+   → expected output `SMOKE PASS: …`.

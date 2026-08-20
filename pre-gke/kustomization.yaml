@@ -14,6 +14,7 @@ resources:
   - nats-config.yaml
   - nats-svc.yaml
   - nats-ws-svc.yaml
+  - nats-client-svc.yaml
   - nats-sts.yaml
   - chatops-sa.yaml
   - chatops-role.yaml
