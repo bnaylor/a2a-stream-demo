@@ -1,0 +1,37 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: worker-example
+  namespace: a2a-demo
+  labels:
+    app: a2a-worker
+    # ChatOps labels worker pods with the session name at creation time;
+    # this file is the REFERENCE SHAPE ChatOps uses to build the pod spec
+    # programmatically (spec §4.2) — not applied as-is.
+spec:
+  restartPolicy: Never
+  # No serviceAccountName — workers get no k8s API access (spec §4.2).
+  automountServiceAccountToken: false
+  containers:
+    - name: worker
+      image: 10.3.10.52:5000/a2a-demo/worker:latest
+      imagePullPolicy: Always
+      env:
+        - name: NATS_URL
+          value: "nats://nats:4222"
+        - name: TASK_ID
+          value: "task-REPLACE"
+        - name: SESSION
+          value: "worker-REPLACE"
+        - name: ANTHROPIC_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: a2a-demo-secrets
+              key: ANTHROPIC_API_KEY
+      resources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          cpu: "1"
+          memory: 512Mi
