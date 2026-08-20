@@ -153,7 +153,10 @@ and then 404 on their first turn.
 Build and push all three images:
 
 ```bash
-gcloud builds submit --config cloudbuild.yaml --project bnaylor-kagents-dev .
+gcloud builds submit --config cloudbuild.yaml --project bnaylor-kagents-dev \
+  --substitutions=SHORT_SHA=$(git rev-parse --short HEAD) .
+# SHORT_SHA must be passed explicitly: manual submits (storage source) leave the
+# built-in empty, which would produce broken ":" tags.
 ```
 
 Create the basic-auth secret (once; the web Service is a public
