@@ -51,3 +51,19 @@ files and review fixes via git instead of scp.
    demo machine — the manager just opens a browser to the `web` NodePort.
    The `tsx`/node requirement applies only to the M1 dev smoke, never to
    the audience.
+
+## M2 handoff (rune)
+
+1. Create the API key secret (once, never committed):
+   `kubectl -n a2a-demo create secret generic a2a-demo-secrets --from-literal=ANTHROPIC_API_KEY=sk-...`
+2. Build + push from repo root:
+   `docker build --target worker  -t 10.3.10.52:5000/a2a-demo/worker:latest  -f agents/Dockerfile . && docker push 10.3.10.52:5000/a2a-demo/worker:latest`
+   `docker build --target chatops -t 10.3.10.52:5000/a2a-demo/chatops:latest -f agents/Dockerfile . && docker push 10.3.10.52:5000/a2a-demo/chatops:latest`
+3. `kubectl apply -k pre-gke/` then `kubectl -n a2a-demo rollout restart deploy chatops`.
+4. Verify: chatops pod Running, logs show "agent-card published" style startup; then
+   `NATS_URL=nats://10.3.10.4:<nats-client NodePort> npx tsx scripts/chat.ts`
+   → type: `Delegate a task: write a haiku about NATS, then report back.`
+   → expect: chatops replies with a session name; `[worker-…]` chunks interleave;
+     `kubectl -n a2a-demo get pods` shows the worker pod appear and complete;
+     asking `what is session worker-… doing?` gets a summary from replay.
+5. Report the transcript + `kubectl -n a2a-demo get pods -w` output back via PR comment.

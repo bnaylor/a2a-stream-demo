@@ -45,4 +45,20 @@ describe("envelope", () => {
     });
     expect(parseEnvelope(raw).kind).toBe("agent-card");
   });
+
+  it("round-trips the optional to field", () => {
+    const env = makeEnvelope({
+      kind: "task", correlationId: "corr-1", taskId: "task-1", contextId: "ctx-1",
+      from, to: { session: "chatops" },
+      payload: { id: "task-1", contextId: "ctx-1", status: { state: "submitted", timestamp: "2026-08-19T21:00:00Z" } },
+    });
+    expect(parseEnvelope(encodeEnvelope(env)).to).toEqual({ session: "chatops" });
+  });
+
+  it("omits to when absent and tolerates malformed to", () => {
+    const env = makeEnvelope({ kind: "agent-card", correlationId: "c", from, payload: {} });
+    expect(env.to).toBeUndefined();
+    const raw = JSON.stringify({ ...JSON.parse(new TextDecoder().decode(encodeEnvelope(env))), to: "junk" });
+    expect(parseEnvelope(raw).to).toBeUndefined(); // non-object to is dropped, not fatal
+  });
 });

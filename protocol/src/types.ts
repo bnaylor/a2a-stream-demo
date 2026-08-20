@@ -41,3 +41,11 @@ export interface AgentIdentity {
   session: string;   // e.g. "chatops", "worker-brisk-otter"
   instanceId: string;
 }
+
+export interface AgentCard {
+  session: string;
+  agentType: string;
+  owner: string;
+  startedAt: string; // ISO-8601
+  description?: string;
+}
