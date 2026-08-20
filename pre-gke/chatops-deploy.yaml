@@ -14,6 +14,9 @@ spec:
         app: chatops
     spec:
       serviceAccountName: chatops
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
       containers:
         - name: chatops
           # PLACEHOLDER — built and pushed by rune:
@@ -31,11 +34,25 @@ spec:
                 secretKeyRef:
                   name: a2a-demo-secrets
                   key: ANTHROPIC_API_KEY
+            # ChatOps model (defaults to claude-sonnet-5 if not set).
+            - name: CHATOPS_MODEL
+              value: "claude-sonnet-5"
+            # Worker pod image (docker registry).
+            - name: WORKER_IMAGE
+              value: "10.3.10.52:5000/a2a-demo/worker:latest"
+            # Worker model (haiku for cost-efficient task execution).
+            - name: WORKER_MODEL
+              value: "claude-haiku-4-5"
+            # Namespace for worker pods (inject from metadata).
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
             # k8s API access is via the mounted service account token (in-cluster).
           resources:
             requests:
-              cpu: 100m
-              memory: 128Mi
+              cpu: 250m
+              memory: 512Mi
             limits:
               cpu: "1"
-              memory: 512Mi
+              memory: 2Gi
