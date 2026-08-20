@@ -241,6 +241,58 @@ describe("Rail: tap status lines", () => {
     for (const t of status_) expect(t.length).toBeLessThanOrEqual(32);
   });
 
+  /**
+   * Every tap's label, paired with the character budget its slot actually
+   * allows — both read back off the rendered geometry, so the assertion does
+   * not have to guess the width the component measured.
+   */
+  function labelsAgainstBudget(container: HTMLElement) {
+    const slots = Array.from(container.querySelectorAll(".tap-slot"));
+    const xs = slots.map((g) => {
+      const m = /translate\((-?[\d.]+)/.exec(g.getAttribute("transform") ?? "");
+      return Number(m?.[1] ?? 0);
+    });
+    return slots.map((g, i) => {
+      const gapLeft = i > 0 ? xs[i] - xs[i - 1] : Infinity;
+      const gapRight = i < xs.length - 1 ? xs[i + 1] - xs[i] : Infinity;
+      const px = Math.min(gapLeft, gapRight) - 8;
+      return {
+        label: g.querySelector(".tap-name")?.textContent ?? "",
+        // NAME_CHAR_PX in Rail.tsx.
+        budget: Number.isFinite(px) ? Math.floor(px / 6.1) : Infinity,
+      };
+    });
+  }
+
+  // The " ?" is part of the label, so it has to come out of the same budget —
+  // appended after the fit, it put the label back outside its slot.
+  it("keeps a stale tap's ? suffix inside the slot budget", () => {
+    const many = Array.from({ length: 9 }, (_, i) => `long-worker-name-${i}`);
+    const seededState = [ev(card("chatops")), ...many.map((w) => ev(card(w)))].reduce(
+      reduce,
+      initialState,
+    );
+    // The first tick only starts the clock on agents that never heartbeat; the
+    // second is the one that ages them out.
+    const started = reduce(seededState, { type: "tick", now: 1_000 });
+    const stale = reduce(started, { type: "tick", now: 10_000_000 });
+    const { container } = render(<Rail state={stale} />);
+
+    const rows = labelsAgainstBudget(container);
+    expect(rows.some((r) => r.label.endsWith(" ?"))).toBe(true);
+    // Suffix included, no label may exceed the room its tap has.
+    for (const { label, budget } of rows) expect(label.length).toBeLessThanOrEqual(budget);
+  });
+
+  it("keeps ordinary labels inside the slot budget too", () => {
+    const many = Array.from({ length: 9 }, (_, i) => `long-worker-name-${i}`);
+    const s = [ev(card("chatops")), ...many.map((w) => ev(card(w)))].reduce(reduce, initialState);
+    const { container } = render(<Rail state={s} />);
+    for (const { label, budget } of labelsAgainstBudget(container)) {
+      expect(label.length).toBeLessThanOrEqual(budget);
+    }
+  });
+
   it("never shows thinking text on the rail", () => {
     const s = [
       ev(card("chatops")),

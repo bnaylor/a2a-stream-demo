@@ -34,8 +34,9 @@ export const MAX_GHOST_STEPS = 24;
 export const STATUS_CHAR_PX = 5.3;
 
 /**
- * Fits a label into `maxChars`, eliding with a single ellipsis. Below three
- * characters there is no honest way to elide, so the label is simply cut.
+ * Fits a label into `maxChars`, eliding with a single ellipsis. Below two
+ * characters the ellipsis would be the whole budget, so the label is cut
+ * instead; at zero or less there is no room for anything.
  *
  * A tap's status line is worker-authored text of arbitrary length sitting in a
  * fixed-width slot; unclipped it runs straight through its neighbours' labels.

@@ -813,6 +813,67 @@ describe("reduce: worker tool activity", () => {
     });
   }
 
+  // report_progress is itself an SDK tool, so every milestone fired a tool_use
+  // and printed "using mcp__a2a__report_progress…" directly above the
+  // [progress] line that is the actual signal.
+  it("says nothing for our own report_progress tool", () => {
+    const s = apply(
+      initialState,
+      ev(card("otter")),
+      ev(toolStatus("otter", "mcp__a2a__report_progress")),
+      ev(chunk("otter", "[progress] fetching spec 2/2")),
+    );
+    expect(s.chat).toHaveLength(1);
+    expect(s.chat[0].text).toBe("fetching spec 2/2");
+  });
+
+  it("suppresses report_progress whichever server exposes it", () => {
+    const s = apply(initialState, ev(toolStatus("otter", "mcp__other__report_progress")));
+    expect(s.chat).toHaveLength(0);
+  });
+
+  it("strips the MCP wiring from any other tool name", () => {
+    const s = apply(initialState, ev(toolStatus("otter", "mcp__foo__search")));
+    expect(s.chat).toHaveLength(1);
+    expect(s.chat[0].text).toBe("using search…");
+  });
+
+  it("leaves an ordinary tool name alone", () => {
+    const s = apply(initialState, ev(toolStatus("otter", "WebSearch")));
+    expect(s.chat[0].text).toBe("using WebSearch…");
+  });
+
+  // Internal bookkeeping, not activity anyone is watching for.
+  it("says nothing for TodoWrite", () => {
+    const s = apply(initialState, ev(toolStatus("otter", "TodoWrite")));
+    expect(s.chat).toHaveLength(0);
+  });
+
+  // Drafting into the pod's scratch directory is real work for a research task.
+  it("still narrates the file tools", () => {
+    const s = apply(
+      initialState,
+      ev(toolStatus("otter", "Write")),
+      ev(toolStatus("otter", "Read")),
+    );
+    expect(s.chat.map((c) => c.text)).toEqual(["using Write…", "using Read…"]);
+  });
+
+  it("ignores a malformed or empty tool name", () => {
+    const s = apply(initialState, ev(toolStatus("otter", "mcp__a2a__")));
+    expect(s.chat).toHaveLength(0);
+  });
+
+  it("does not let a suppressed tool break the collapse of the run around it", () => {
+    const s = apply(
+      initialState,
+      ev(toolStatus("otter", "WebSearch")),
+      ev(toolStatus("otter", "mcp__a2a__report_progress")),
+      ev(toolStatus("otter", "WebSearch")),
+    );
+    expect(s.chat).toHaveLength(1);
+  });
+
   it("does not let a tool line become the tap's status line", () => {
     const s = apply(initialState, ev(card("otter")), ev(toolStatus("otter", "WebSearch")));
     expect(s.agents.get("otter")?.statusLine).toBeUndefined();

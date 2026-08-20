@@ -423,6 +423,7 @@ export default function Rail({ state, onDismiss }: RailProps) {
             tap.kind === "worker" &&
             onDismiss !== undefined &&
             (status === "done" || status === "closed");
+          const staleSuffix = status === "stale" && tap.kind !== "you" ? " ?" : "";
           return (
             // Two groups on purpose: the outer one carries the x position as an
             // attribute, the inner one owns the CSS transform the lifecycle
@@ -475,14 +476,17 @@ export default function Rail({ state, onDismiss }: RailProps) {
               )}
               {tap.kind === "chatops" && <circle className="tap-hub" cx={0} cy={RAIL_Y} r={8.5} />}
               <text className="tap-name" x={0} y={NAME_Y} textAnchor="middle">
+                {/* The suffix is part of the label, so it comes out of the same
+                    budget — appending it after the fit would put it back
+                    outside the slot. */}
                 {ellipsize(
                   shortName(tap.session),
-                  Math.floor((slots.get(tap.session) ?? 0) / NAME_CHAR_PX),
+                  Math.floor((slots.get(tap.session) ?? 0) / NAME_CHAR_PX) - staleSuffix.length,
                 )}
                 {/* The `?` asks "is this pod still there?" — never the right
                     question about the browser's own socket, which says so in
                     words on the line below. */}
-                {status === "stale" && tap.kind !== "you" ? " ?" : ""}
+                {staleSuffix}
               </text>
               <text className="tap-status" x={0} y={STATUS_Y} textAnchor="middle">
                 {/* Worker-authored text in a fixed-width slot: clip it to the

@@ -303,15 +303,40 @@ function latestLine(lines: readonly string[]): string {
   return "";
 }
 
+/** SDK tools exposed over MCP are named `mcp__<server>__<tool>` on the wire. */
+const MCP_PREFIX = "mcp__";
+/**
+ * Tools whose activity is plumbing, not work worth narrating.
+ *
+ * `report_progress` is our own MCP tool: every milestone fires it, so
+ * narrating it printed "using report_progress…" immediately above the
+ * `[progress] ` line that is the actual signal. `TodoWrite` is the agent's
+ * internal bookkeeping — it says nothing about the task the audience is
+ * watching. Read/Write/Glob/Grep are deliberately NOT here: for a research
+ * task, drafting into the pod's scratch directory is real work.
+ */
+const SILENT_TOOLS = new Set(["report_progress", "TodoWrite"]);
+
+/** `mcp__a2a__report_progress` → `report_progress`; the wiring is ours, not news. */
+function bareToolName(tool: string): string {
+  if (!tool.startsWith(MCP_PREFIX)) return tool;
+  const rest = tool.slice(MCP_PREFIX.length);
+  const sep = rest.indexOf("__");
+  return sep >= 0 ? rest.slice(sep + 2) : rest;
+}
+
 /**
  * The tool name the mapper hangs off a `tool_use` beat
  * (`agents/common/src/mapper.ts`: `metadata: { tool: name }` on a non-final
- * `working` status-update). `report_progress` carries `metadata.progress`
- * instead, so the two never collide.
+ * `working` status-update), reduced to the name a person would recognise, or
+ * `undefined` when this tool is not worth a line. `report_progress` milestones
+ * arrive separately as `metadata.progress`, so the two never collide.
  */
 function toolOf(payload: unknown): string | undefined {
-  const tool = (payload as { metadata?: { tool?: unknown } }).metadata?.tool;
-  return typeof tool === "string" && tool !== "" ? tool : undefined;
+  const raw = (payload as { metadata?: { tool?: unknown } }).metadata?.tool;
+  if (typeof raw !== "string" || raw === "") return undefined;
+  const name = bareToolName(raw);
+  return name === "" || SILENT_TOOLS.has(name) ? undefined : name;
 }
 
 /** How a tool beat reads in the transcript. */

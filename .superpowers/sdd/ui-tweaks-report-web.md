@@ -489,3 +489,80 @@ t=5.6s  ⏳using WebFetch…
 - `npm run -w web build` — green
 - `npm test` (root) — 55 passed / 4 skipped, untouched
 - `npx vitest run agents/` — 37 passed, untouched
+
+---
+
+# tweaks2 fix round — MCP tool-name noise and trivia
+
+## 1. MCP tool names leaked into the transcript (important)
+
+Correct and embarrassing: `report_progress` is itself an SDK tool, so every
+milestone fired a `tool_use` first. The chat read:
+
+```
+⏳using mcp__a2a__report_progress…
+⏳Fetched 2 of 4 sources
+```
+
+— the plumbing announced immediately above the line that is the actual signal.
+
+`toolOf()` now reduces a wire name to the one a person would recognise and
+decides whether it is worth a line at all:
+
+- `bareToolName()` strips the `mcp__<server>__` wiring, so `mcp__foo__search`
+  renders `using search…` and a plain `WebSearch` is unchanged.
+- `SILENT_TOOLS` suppresses the result entirely. It is matched against the
+  *bare* name, so `report_progress` is silenced whichever server exposes it,
+  not just our own `mcp__a2a__` binding.
+- An empty or malformed name (`mcp__a2a__`) yields nothing rather than
+  `using …`.
+
+Suppression happens before the entry is built, so it cannot break the collapse
+of the run around it: `WebSearch`, `report_progress`, `WebSearch` still reads as
+one `using WebSearch…` line.
+
+**Call on TodoWrite: suppressed.** It is the agent's internal bookkeeping and
+says nothing about the task the audience is watching — it would fire several
+times a run and read as activity while nothing observable happened.
+Deliberately *not* suppressed: `Read`, `Write`, `Glob`, `Grep`. For a research
+task, drafting into the pod's scratch directory is real work, and the
+no-network demo prompt (#5) is entirely `Write`/`Read` — silencing those would
+leave that prompt with a dead transcript, which is the bug this feature exists
+to fix.
+
+## 2-4. Trivia
+
+- **Stale suffix escaped the slot budget** (`Rail.tsx`). The ` ?` was appended
+  *after* `ellipsize`, putting two characters back outside the slot the fit had
+  just respected. It now comes out of the same budget.
+- **Stale comment** in `deploy/base/chatops-deploy.yaml` still argued for
+  sonnet above a haiku value; rewritten to state the actual reason (a slower
+  model reads as a slow bus, which is the opposite of the point).
+- **`ellipsize` doc** said "below three characters" over a `< 2` branch;
+  aligned to the code.
+
+## Mutation check
+
+| mutation | result |
+|---|---|
+| stop suppressing `report_progress` | 3 failed |
+| suppress nothing at all | 4 failed |
+| stop stripping the `mcp__` wiring | 5 failed |
+| strip only the server, leaving `mcp__` on | 5 failed |
+| append the stale suffix outside the budget | 1 failed |
+
+The stale-suffix test reads tap positions back off the rendered geometry and
+derives each slot's character budget from them, so it asserts the real
+invariant — no label longer than its slot — without having to guess the width
+the component measured. A companion test holds the same line for ordinary
+labels.
+
+## Verification
+
+- `npm run -w web test` — **234 passed** (224 → 234, 10 new)
+- `npm run typecheck:web` and `npm run typecheck` — clean
+- `npm run -w web build` — green
+- `npm test` (root) 55 passed / 4 skipped and `npx vitest run agents/` 37
+  passed — both untouched
+- `kubectl kustomize` — `deploy/base` 13 objects, `overlays/local` 13,
+  `overlays/gke` 14; `WORKER_MODEL` renders `claude-haiku-4-5`

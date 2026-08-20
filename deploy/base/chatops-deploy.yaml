@@ -48,8 +48,9 @@ spec:
             # the container image above, via kustomizeconfig/images.yaml.
             - name: WORKER_IMAGE
               value: "a2a-demo/worker:latest"
-            # Worker model (sonnet: haiku finished research tasks too fast to
-            # watch, and the extra depth is worth the cost here).
+            # Worker model (haiku: the complex demo prompts already take tens of
+            # seconds, and a slower model reads as a slow bus rather than a slow
+            # model — which is the opposite of the point being made here).
             - name: WORKER_MODEL
               value: "claude-haiku-4-5"
             # Worker max budget (USD per task).
