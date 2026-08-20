@@ -1,6 +1,17 @@
-# Route the Agent SDK at Vertex instead of the Anthropic API. Credentials come
-# from Workload Identity (see workload-identity.yaml) — there is no API key on
-# GKE, which is why the base marks the ANTHROPIC_API_KEY secretKeyRef optional.
+# Vertex routing — currently DISABLED (this patch is not listed in
+# kustomization.yaml). The GKE deployment runs on the personal
+# ANTHROPIC_API_KEY in the a2a-demo-secrets Secret instead.
+#
+# Why: Anthropic-on-Vertex access is granted through the managed
+# `gke-claude-dev` project, and granting our GSA
+# (a2a-demo-agents@bnaylor-kagents-dev.iam.gserviceaccount.com)
+# roles/aiplatform.user there needs an owner-side approval that is
+# unlikely to be granted. Everything else for Vertex is already in
+# place (Workload Identity on cluster+nodepool, GSA, KSA bindings —
+# see workload-identity.yaml), so flipping to Vertex later is:
+#   1. get the grant on gke-claude-dev
+#   2. re-add `- path: chatops-vertex.yaml` to kustomization.yaml
+#   3. kubectl apply -k deploy/overlays/gke
 #
 # ChatOps passes these three through to every worker pod it creates
 # (agents/chatops/src/k8s.ts).
@@ -17,9 +28,9 @@ spec:
           env:
             - name: CLAUDE_CODE_USE_VERTEX
               value: "1"
-            # Regional endpoint. Claude models are enabled in us-east5 for this
-            # project; the GKE cluster itself is in northamerica-northeast1.
+            # `global` is the verified-working location for claude-sonnet-5
+            # via gke-claude-dev (probed 2026-08-20).
             - name: CLOUD_ML_REGION
-              value: "us-east5"
+              value: "global"
             - name: ANTHROPIC_VERTEX_PROJECT_ID
-              value: "bnaylor-kagents-dev"
+              value: "gke-claude-dev"

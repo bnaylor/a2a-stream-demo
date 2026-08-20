@@ -34,5 +34,6 @@ configMapGenerator:
 patches:
   - path: web-svc-lb.yaml
   - path: workload-identity.yaml
-  - path: chatops-vertex.yaml
+  # Vertex disabled pending gke-claude-dev grant — see chatops-vertex.yaml
+  # - path: chatops-vertex.yaml
   - path: web-auth.yaml
