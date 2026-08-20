@@ -37,5 +37,17 @@ files and review fixes via git instead of scp.
    Expected ready: `nats-0` running; `chatops`/`web` will ImagePullBackOff (images land in M2/M3 — that's fine).
 2. Report back (commit to this README or PR comment):
    - `kubectl -n a2a-demo get svc nats-client nats-ws web -o wide` → the assigned NodePorts.
-3. scromp then runs from the laptop: `NATS_URL=nats://10.3.10.4:<nats-client NodePort> npm run smoke`
+3. **Smoke test** — run from a machine that has node + `tsx` installed
+   (rune's build box does; scromp's corp laptop does not — it blocks
+   `npm install` of `tsx`). Do NOT assume the laptop can run it:
+   `NATS_URL=nats://10.3.10.<node>:<nats-client NodePort> npm run smoke`
    → expected output `SMOKE PASS: …`.
+
+   **Verified 2026-08-19:** rune ran the smoke against the live cluster
+   (`nats://10.3.10.3:30898`) → `SMOKE PASS … 6 events streamed live and
+   replayed cold`. M1 is complete.
+
+   **M3 note (audience-facing):** the browser UI needs no tooling on the
+   demo machine — the manager just opens a browser to the `web` NodePort.
+   The `tsx`/node requirement applies only to the M1 dev smoke, never to
+   the audience.
