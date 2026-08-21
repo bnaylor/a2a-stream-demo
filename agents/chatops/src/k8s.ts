@@ -1,4 +1,5 @@
 import { CoreV1Api, KubeConfig, V1Pod } from "@kubernetes/client-node";
+import { VERTEX_ENV_KEYS } from "@a2a-demo/agents-common";
 
 export interface WorkerPodSpec {
   session: string;
@@ -28,10 +29,39 @@ export interface K8sConfig {
   workerModel?: string;
   /** Passed through to the worker as WORKER_MAX_BUDGET_USD when set. */
   workerMaxBudgetUsd?: string;
+  /**
+   * Source for PASSTHROUGH_ENV_KEYS — normally ChatOps' own `process.env`.
+   * Whichever of those keys are set here are copied onto the worker pod, so a
+   * ChatOps configured for Vertex spawns workers configured for Vertex.
+   */
+  passthroughEnv?: Record<string, string | undefined>;
 }
+
+/**
+ * Env vars ChatOps copies verbatim from its own environment onto worker pods.
+ * The gke overlay sets all three; the local overlay sets none, and workers fall
+ * back to the ANTHROPIC_API_KEY Secret.
+ */
+/**
+ * Copied from ChatOps' own env onto each worker pod. Vertex config, plus the
+ * thinking budget so the twisties can be tuned from one deployment env var
+ * rather than needing a worker image change.
+ */
+export const PASSTHROUGH_ENV_KEYS: readonly string[] = [
+  ...VERTEX_ENV_KEYS,
+  "WORKER_THINKING_BUDGET",
+];
 
 export const WORKER_APP_LABEL = "a2a-worker";
 export const SESSION_LABEL = "a2a-demo/session";
+
+/**
+ * Worker pods run as this KSA. It has no Role/RoleBinding and its token is not
+ * mounted (`automountServiceAccountToken: false`), so it grants no k8s API
+ * access — it exists so GKE Workload Identity has something to bind a Google
+ * service account to. Credentials reach the pod via the GKE metadata server.
+ */
+export const WORKER_SERVICE_ACCOUNT = "a2a-worker";
 
 /**
  * Pod names are `a2a-worker-<session>`. The "worker" segment used to come from
@@ -46,8 +76,8 @@ export const WORK_DIR = "/work";
 const WORK_VOLUME = "work";
 
 /**
- * Pod shape mirrors pre-gke/worker-reference.yaml (spec §4.2): no service
- * account, no k8s API access, never restarted.
+ * Pod shape mirrors deploy/base/worker-reference.yaml (spec §4.2): no k8s API
+ * access, never restarted.
  */
 export function workerPodManifest(cfg: K8sConfig, spec: WorkerPodSpec): V1Pod {
   const env = [
@@ -59,7 +89,13 @@ export function workerPodManifest(cfg: K8sConfig, spec: WorkerPodSpec): V1Pod {
     {
       name: "ANTHROPIC_API_KEY",
       valueFrom: {
-        secretKeyRef: { name: cfg.secretName, key: "ANTHROPIC_API_KEY" },
+        // optional: on GKE there is no key Secret — auth is Vertex via
+        // Workload Identity, and a hard reference would wedge the pod.
+        secretKeyRef: {
+          name: cfg.secretName,
+          key: "ANTHROPIC_API_KEY",
+          optional: true,
+        },
       },
     },
   ];
@@ -68,6 +104,10 @@ export function workerPodManifest(cfg: K8sConfig, spec: WorkerPodSpec): V1Pod {
   }
   if (cfg.workerMaxBudgetUsd) {
     env.push({ name: "WORKER_MAX_BUDGET_USD", value: cfg.workerMaxBudgetUsd });
+  }
+  for (const name of PASSTHROUGH_ENV_KEYS) {
+    const value = cfg.passthroughEnv?.[name];
+    if (value) env.push({ name, value });
   }
 
   return {
@@ -80,6 +120,7 @@ export function workerPodManifest(cfg: K8sConfig, spec: WorkerPodSpec): V1Pod {
     },
     spec: {
       restartPolicy: "Never",
+      serviceAccountName: WORKER_SERVICE_ACCOUNT,
       automountServiceAccountToken: false,
       securityContext: { runAsNonRoot: true, runAsUser: 1000 },
       volumes: [{ name: WORK_VOLUME, emptyDir: {} }],

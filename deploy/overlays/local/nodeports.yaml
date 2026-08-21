@@ -1,0 +1,43 @@
+# The three LAN-facing ports, pinned so the demo URLs never move.
+#   nats-client 30898 — dev smoke / scripts/chat.ts
+#   nats-ws     30222 — direct WebSocket access for debugging (the UI itself
+#                       now goes same-origin through the web pod's /ws proxy)
+#   web         30080 — the audience URL, http://10.3.10.<node>:30080
+apiVersion: v1
+kind: Service
+metadata:
+  name: nats-client
+  namespace: a2a-demo
+spec:
+  type: NodePort
+  ports:
+    - name: client
+      port: 4222
+      targetPort: 4222
+      nodePort: 30898
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nats-ws
+  namespace: a2a-demo
+spec:
+  type: NodePort
+  ports:
+    - name: websocket
+      port: 9222
+      targetPort: 9222
+      nodePort: 30222
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  namespace: a2a-demo
+spec:
+  type: NodePort
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+      nodePort: 30080

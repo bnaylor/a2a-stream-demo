@@ -15,8 +15,10 @@ spec:
     spec:
       containers:
         - name: web
-          # Static nginx serving the built web/ UI (web/Dockerfile).
-          image: 10.3.10.52:5000/a2a-demo/web:latest
+          # Static nginx serving the built web/ UI (web/Dockerfile). The image
+          # ships web/nginx.conf, which proxies /ws to the nats-ws Service so
+          # the browser's WebSocket is same-origin.
+          image: a2a-demo/web:latest
           imagePullPolicy: Always
           ports:
             - name: http

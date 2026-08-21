@@ -4,8 +4,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { render, screen, cleanup } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { makeEnvelope } from "@a2a-demo/protocol/src/envelope.ts";
 import Chat from "./Chat.tsx";
-import type { ChatEntry } from "./model.ts";
+import { initialState, reduce, type ChatEntry } from "./model.ts";
 
 describe("Chat component", () => {
   it("renders all four entry kinds with their affordances", () => {
@@ -193,6 +194,83 @@ describe("Chat: inline markdown", () => {
     );
     expect(container.querySelector("b")).toBeNull();
     expect(screen.getByText("<b>not bold</b>")).toBeTruthy();
+    cleanup();
+  });
+});
+
+// The user's report: thinking streaming into the chat window beneath the
+// twisty as always-rendered plain entries. Whatever the reducer produces, the
+// pane must never put reasoning on the transcript itself.
+describe("Chat: thinking never renders as a plain entry", () => {
+  /** Every mapper-marked fragment the reducer could plausibly be handed. */
+  const streamed = [
+    "[thinking] Let",
+    "[thinking]  me",
+    "[thinking]  think about parking",
+    "[thinking] ",
+    "[thinking] Let[thinking]  me batch",
+  ];
+
+  it("keeps every marked fragment out of the transcript", () => {
+    const entries: ChatEntry[] = streamed.reduce<ChatEntry[]>((acc, text, i) => {
+      const s = reduce(
+        { ...initialState, chat: acc, streamMsgCount: i },
+        {
+          type: "envelope",
+          live: true,
+          env: makeEnvelope({
+            kind: "message-chunk",
+            correlationId: "c",
+            taskId: "t",
+            contextId: "x",
+            from: { session: "otter", agentType: "claude-code" },
+            payload: { role: "agent", parts: [{ kind: "text", text }], messageId: "m" },
+          }),
+        },
+      );
+      return s.chat;
+    }, []);
+
+    const { container } = render(<Chat entries={entries} onPublishChat={vi.fn()} />);
+    const plain = Array.from(container.querySelectorAll(".chat-entry")).filter(
+      (e) => !e.classList.contains("chat-thinking"),
+    );
+    expect(plain).toHaveLength(0);
+    // And the marker itself is never on screen as literal text.
+    expect(container.textContent).not.toContain("[thinking] Let");
+    cleanup();
+  });
+
+  it("puts a twisty's reasoning behind the chevron, not in the transcript", () => {
+    const entry: ChatEntry = {
+      id: "t",
+      kind: "thinking",
+      session: "otter",
+      text: "reasoning line",
+      correlationId: "c",
+      lines: ["reasoning line"],
+      latest: "reasoning line",
+    };
+    const { container } = render(<Chat entries={[entry]} onPublishChat={vi.fn()} />);
+    // Collapsed, the log is not in the tree at all — nothing "always rendered".
+    expect(container.querySelector(".thinking-log")).toBeNull();
+    expect(container.querySelectorAll(".chat-delegate")).toHaveLength(0);
+    expect(container.querySelectorAll(".chat-chatops")).toHaveLength(0);
+    cleanup();
+  });
+
+  it("says what it is when it has no line yet, rather than showing a blank row", () => {
+    const entry: ChatEntry = {
+      id: "t",
+      kind: "thinking",
+      session: "otter",
+      text: "",
+      correlationId: "c",
+      lines: [""],
+      latest: "",
+    };
+    render(<Chat entries={[entry]} onPublishChat={vi.fn()} />);
+    expect(screen.getByText("thinking…")).toBeTruthy();
     cleanup();
   });
 });

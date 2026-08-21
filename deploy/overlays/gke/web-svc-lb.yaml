@@ -1,0 +1,14 @@
+# No MetalLB scarcity on GKE, so the UI gets a real LoadBalancer. It is public
+# and unauthenticated at the network layer — the basic auth in nginx-gke.conf is
+# what keeps the demo from being an open Claude endpoint.
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  namespace: a2a-demo
+spec:
+  type: LoadBalancer
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80

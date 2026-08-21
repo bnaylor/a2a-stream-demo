@@ -42,8 +42,11 @@ const NOTICE_ARTIFACT_CHARS = 500;
  * emit the whole deliverable as one artifact, and `task_status` only replays it
  * at DIGEST_TEXT_CHARS per event. A notice is a nudge and can stay short; this
  * has to carry the actual result, so it gets its own, much larger cap.
+ *
+ * Raised from 4000 after live testing: research answers with a long sources
+ * list were being truncated mid-list, and ChatOps would say so in its summary.
  */
-const SUMMARY_ARTIFACT_CHARS = 4000;
+const SUMMARY_ARTIFACT_CHARS = 12000;
 const DIGEST_TEXT_CHARS = 120;
 const DIGEST_MAX_EVENTS = 30;
 const TERMINAL_PHASES = ["Failed", "Succeeded"];

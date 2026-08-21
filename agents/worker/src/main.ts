@@ -1,7 +1,12 @@
 import { createSdkMcpServer, query, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { fetchTaskRequest } from "@a2a-demo/protocol";
-import { connectBus } from "@a2a-demo/agents-common";
+import {
+  connectBus,
+  missingModelAuthEnv,
+  thinkingBudgetFromEnv,
+  thinkingConfig,
+} from "@a2a-demo/agents-common";
 import { runWorker } from "./run.ts";
 import { makeProgressPublisher } from "./progress.ts";
 import { randomUUID } from "node:crypto";
@@ -12,13 +17,21 @@ const need = (k: string): string => {
   return v;
 };
 
+// Fail fast on model credentials (spec §5): an API key, or a complete Vertex
+// config when CLAUDE_CODE_USE_VERTEX=1 (the GKE overlay's path).
+const missingAuth = missingModelAuthEnv(process.env);
+if (missingAuth.length > 0) {
+  for (const k of missingAuth) console.error(`${k} is required`);
+  process.exit(1);
+}
+
 const taskId = need("TASK_ID");
 const session = need("SESSION");
 const natsUrl = need("NATS_URL");
-need("ANTHROPIC_API_KEY"); // fail fast (spec §5)
 const correlationId = process.env.CORRELATION_ID ?? `corr-${randomUUID()}`;
 const contextId = process.env.CONTEXT_ID ?? `ctx-${randomUUID()}`;
 const WORK_DIR = "/work";
+const workerModel = process.env.WORKER_MODEL ?? "claude-haiku-4-5";
 
 const identity = { agentType: "claude-code", owner: "bnaylor", session, instanceId: randomUUID() };
 const bus = await connectBus({ natsUrl, identity, description: `worker for ${taskId}` });
@@ -53,11 +66,19 @@ const code = await runWorker({
   queryStream: (prompt) => query({
     prompt,
     options: {
-      model: process.env.WORKER_MODEL ?? "claude-sonnet-5",
+      model: workerModel,
       cwd: WORK_DIR,
       systemPrompt: SYSTEM_PROMPT,
       permissionMode: "dontAsk",
       includePartialMessages: true,
+      // Without this the API runs its redacted thinking phase and streams
+      // token-count pings with no text, so the UI's thinking twisties have
+      // nothing to show. `summarized` is the most the SDK offers — there is no
+      // raw mode. Costs latency and thinking tokens; accepted deliberately.
+      thinking: thinkingConfig(
+        workerModel,
+        thinkingBudgetFromEnv(process.env.WORKER_THINKING_BUDGET),
+      ),
       mcpServers: { a2a: mcp },
       // Explicit allowlist. Write is deliberately permitted so research tasks
       // can draft into the pod's own emptyDir scratch at /work (cwd); the pod

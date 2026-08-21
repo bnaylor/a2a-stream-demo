@@ -1,0 +1,63 @@
+# Cloud Build for the GKE demo images.
+#
+#   gcloud builds submit --config cloudbuild.yaml --project bnaylor-kagents-dev .
+#
+# Every image is tagged :latest (what deploy/overlays/gke pulls, with
+# imagePullPolicy: Always) and :$SHORT_SHA (so a bad rollout has something to
+# roll back to). The build context is the repo root for all three — the agent
+# and web Dockerfiles both need the workspace package-lock.
+
+timeout: 1800s
+
+substitutions:
+  _AR: northamerica-northeast1-docker.pkg.dev/bnaylor-kagents-dev/a2a-demo
+
+steps:
+  - id: worker
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --target=worker
+      - -f
+      - agents/Dockerfile
+      - -t
+      - ${_AR}/worker:latest
+      - -t
+      - ${_AR}/worker:$SHORT_SHA
+      - .
+
+  - id: chatops
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --target=chatops
+      - -f
+      - agents/Dockerfile
+      - -t
+      - ${_AR}/chatops:latest
+      - -t
+      - ${_AR}/chatops:$SHORT_SHA
+      - .
+
+  - id: web
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - web/Dockerfile
+      - -t
+      - ${_AR}/web:latest
+      - -t
+      - ${_AR}/web:$SHORT_SHA
+      - .
+
+images:
+  - ${_AR}/worker:latest
+  - ${_AR}/worker:$SHORT_SHA
+  - ${_AR}/chatops:latest
+  - ${_AR}/chatops:$SHORT_SHA
+  - ${_AR}/web:latest
+  - ${_AR}/web:$SHORT_SHA
+
+options:
+  logging: CLOUD_LOGGING_ONLY

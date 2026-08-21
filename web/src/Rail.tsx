@@ -26,8 +26,11 @@ import {
   MIN_WORKER_PITCH,
   RAIL_PAD_LEFT,
   RAIL_PAD_RIGHT,
+  STATUS_CHAR_PX,
   buildGhost,
+  ellipsize,
   layoutTaps,
+  slotWidths,
   type GhostStep,
   type TapPosition,
 } from "./rail-layout.ts";
@@ -52,6 +55,8 @@ const SVG_HEIGHT = 184;
 const FALLBACK_WIDTH = 1200;
 /** Mono advance width at the peek's font size, for fitting text to the rail. */
 const PEEK_CHAR_PX = 5.6;
+/** Mono advance width at the tap-name font size (11px). */
+const NAME_CHAR_PX = 6.1;
 
 /** One pulse's flight time, end to end. */
 const PULSE_MS = 900;
@@ -123,6 +128,17 @@ function linkText(connection: ConnectionState): string {
   }
 }
 
+/**
+ * What a tap says about itself, in one short line.
+ *
+ * The live milestone is only shown while the agent is actually running. A
+ * finished pod reports the state it finished in: its last `[progress] ` note
+ * is a stale claim about work that stopped, and leaving it up made a done tap
+ * look busy until it was dismissed.
+ *
+ * Only `[progress] ` milestones ever reach `statusLine` — reasoning is routed
+ * to a twisty by the reducer and never touches the rail.
+ */
 function statusText(
   tap: TapPosition,
   agent: AgentView | undefined,
@@ -130,7 +146,8 @@ function statusText(
 ): string {
   if (tap.kind === "you") return linkText(connection);
   if (!agent) return "awaiting card";
-  if (agent.statusLine) return agent.statusLine;
+  const running = agent.status === "live" || agent.status === "stale";
+  if (running && agent.statusLine) return agent.statusLine;
   switch (agent.status) {
     case "live":
       return tap.kind === "chatops" ? "routing" : "working";
@@ -202,6 +219,7 @@ export default function Rail({ state, onDismiss }: RailProps) {
 
   const taps = useMemo(() => layoutTaps(visible, width), [visible, width]);
   const tapX = useMemo(() => new Map(taps.map((t) => [t.session, t.x])), [taps]);
+  const slots = useMemo(() => slotWidths(taps, width), [taps, width]);
 
   // --- the animation loop ----------------------------------------------------
   const runLoop = useCallback(() => {
@@ -405,6 +423,7 @@ export default function Rail({ state, onDismiss }: RailProps) {
             tap.kind === "worker" &&
             onDismiss !== undefined &&
             (status === "done" || status === "closed");
+          const staleSuffix = status === "stale" && tap.kind !== "you" ? " ?" : "";
           return (
             // Two groups on purpose: the outer one carries the x position as an
             // attribute, the inner one owns the CSS transform the lifecycle
@@ -457,14 +476,26 @@ export default function Rail({ state, onDismiss }: RailProps) {
               )}
               {tap.kind === "chatops" && <circle className="tap-hub" cx={0} cy={RAIL_Y} r={8.5} />}
               <text className="tap-name" x={0} y={NAME_Y} textAnchor="middle">
-                {shortName(tap.session)}
+                {/* The suffix is part of the label, so it comes out of the same
+                    budget — appending it after the fit would put it back
+                    outside the slot. */}
+                {ellipsize(
+                  shortName(tap.session),
+                  Math.floor((slots.get(tap.session) ?? 0) / NAME_CHAR_PX) - staleSuffix.length,
+                )}
                 {/* The `?` asks "is this pod still there?" — never the right
                     question about the browser's own socket, which says so in
                     words on the line below. */}
-                {status === "stale" && tap.kind !== "you" ? " ?" : ""}
+                {staleSuffix}
               </text>
               <text className="tap-status" x={0} y={STATUS_Y} textAnchor="middle">
-                {statusText(tap, agent, state.connection)}
+                {/* Worker-authored text in a fixed-width slot: clip it to the
+                    room this tap actually has, or it runs through its
+                    neighbours' labels. */}
+                {ellipsize(
+                  statusText(tap, agent, state.connection),
+                  Math.floor((slots.get(tap.session) ?? 0) / STATUS_CHAR_PX),
+                )}
               </text>
             </g>
             {/* A sibling, not a child, of the replay button: nesting one

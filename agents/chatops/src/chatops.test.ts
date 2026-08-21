@@ -214,11 +214,11 @@ describe("startChatOps", () => {
     expect(body.length).toBeGreaterThan(500);
   });
 
-  it("still caps the summary excerpt, fence intact, at 4000 chars", async () => {
+  it("still caps the summary excerpt, fence intact, at 12000 chars", async () => {
     const f = makeFakes();
-    await finishDelegate(f, "completed", "C".repeat(5000) + "PAST-THE-CAP");
+    await finishDelegate(f, "completed", "C".repeat(13000) + "PAST-THE-CAP");
     const prompt = f.prompts.at(-1)!;
-    expect(fencedBody(prompt)).toHaveLength(4000);
+    expect(fencedBody(prompt)).toHaveLength(12000);
     expect(prompt).not.toContain("PAST-THE-CAP");
     expect(prompt.match(/<\/untrusted_worker_output>/g)).toHaveLength(1);
   });

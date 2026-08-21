@@ -8,6 +8,7 @@ import {
   corrColor,
   excerptOf,
   initialState,
+  partitionThinking,
   reduce,
 } from "./model.ts";
 
@@ -564,6 +565,455 @@ describe("reduce: thinking", () => {
     const s = apply(initialState, ev(chunk("otter", "here is the answer")));
     expect(s.chat[0]).toMatchObject({ kind: "delegate", text: "here is the answer" });
     expect(s.chat[0].lines).toBeUndefined();
+  });
+});
+
+/**
+ * These pin the reducer to the shapes `agents/common/src/mapper.ts` actually
+ * puts on the wire — that file is the source of truth and is deliberately NOT
+ * imported here (the web bundle must not reach into the agents workspace), so
+ * the shapes are replicated as literals. If the mapper's marker or its
+ * per-delta framing changes, these are the tests that should fail.
+ *
+ * The shape that matters: `mapSdkMessage` emits ONE `message-chunk` per
+ * `thinking_delta`, each with `parts: [{ kind: "text", text: "[thinking] " +
+ * fragment }]`. The marker is stamped on every fragment, not once per block.
+ */
+describe("reduce: real mapper delta shapes", () => {
+  /** Exactly what the mapper produces for one thinking_delta. */
+  const mapperThinking = (session: string, fragment: string, taskId = TASK) =>
+    ev(chunk(session, `[thinking] ${fragment}`, taskId));
+  /** Exactly what the mapper produces for one text_delta. */
+  const mapperText = (session: string, fragment: string, taskId = TASK) =>
+    ev(chunk(session, fragment, taskId));
+
+  it("accumulates a per-fragment-prefixed token stream into one twisty", () => {
+    // "Let", " me", " think" — the marker repeats on every fragment.
+    const s = apply(
+      initialState,
+      mapperThinking("otter", "Let"),
+      mapperThinking("otter", " me"),
+      mapperThinking("otter", " think"),
+    );
+    expect(s.chat).toHaveLength(1);
+    expect(s.chat[0].kind).toBe("thinking");
+    expect(s.chat[0].latest).toBe("Let me think");
+    // The marker itself never survives into the accumulated text.
+    expect(s.chat[0].text).not.toContain("[thinking]");
+  });
+
+  it("keeps the twisty updating live, entry by entry", () => {
+    let s = reduce(initialState, mapperThinking("otter", "Reading"));
+    expect(s.chat[0].latest).toBe("Reading");
+    s = reduce(s, mapperThinking("otter", " the spec"));
+    expect(s.chat[0].latest).toBe("Reading the spec");
+    expect(s.chat).toHaveLength(1);
+  });
+
+  // A signature-only thinking block streams no text. It used to open a twisty
+  // that then sat in the transcript with nothing in it for the whole run.
+  it("does not open a twisty for a thinking block with no content", () => {
+    const s = apply(initialState, ev(chunk("otter", "[thinking] ")));
+    expect(s.chat).toHaveLength(0);
+  });
+
+  it("still swallows the empty marker rather than showing it as output", () => {
+    const s = apply(initialState, ev(chunk("otter", "[thinking]")));
+    expect(s.chat).toHaveLength(0);
+  });
+
+  it("opens the twisty as soon as content does arrive", () => {
+    const s = apply(
+      initialState,
+      ev(chunk("otter", "[thinking] ")),
+      mapperThinking("otter", "now I have something"),
+    );
+    expect(s.chat).toHaveLength(1);
+    expect(s.chat[0]).toMatchObject({ kind: "thinking", latest: "now I have something" });
+  });
+
+  it("routes fragments batched into one chunk entirely into the twisty", () => {
+    // Anything that concatenates mapper fragments yields embedded markers;
+    // none of them may leak into a plain entry.
+    const s = apply(initialState, ev(chunk("otter", "[thinking] Let[thinking]  me[thinking]  go")));
+    expect(s.chat).toHaveLength(1);
+    expect(s.chat[0].kind).toBe("thinking");
+    expect(s.chat[0].latest).toBe("Let me go");
+  });
+
+  it("leaves the literal word in ordinary prose alone", () => {
+    // The marker is only a marker at position 0 — a worker writing about the
+    // demo must not have its sentence eaten.
+    const s = apply(initialState, mapperText("otter", "the UI shows a [thinking] twisty"));
+    expect(s.chat[0]).toMatchObject({ kind: "delegate", text: "the UI shows a [thinking] twisty" });
+  });
+
+  it("never lets thinking text reach the rail's status line", () => {
+    const s = apply(
+      initialState,
+      ev(card("otter")),
+      mapperThinking("otter", "I should check the parking situation first"),
+    );
+    expect(s.agents.get("otter")?.statusLine).toBeUndefined();
+  });
+
+  // Documents a wire-level limit rather than a defect: a model without
+  // extended thinking emits its reasoning as text_delta, which the mapper does
+  // not mark, so the reducer cannot tell it from the deliverable.
+  it("treats unmarked text_delta prose as delegate output", () => {
+    const s = apply(initialState, mapperText("otter", "Let me think about what the user wants."));
+    expect(s.chat[0].kind).toBe("delegate");
+  });
+});
+
+/**
+ * A worker's tool calls used to reach the rail and nothing else, so a run that
+ * was mostly WebFetch looked like a frozen transcript beside a busy bus.
+ *
+ * Shape per `agents/common/src/mapper.ts` (source of truth, deliberately not
+ * imported): a `tool_use` block becomes a NON-final `working` status-update
+ * carrying `metadata: { tool: name }`.
+ */
+describe("reduce: worker tool activity", () => {
+  function toolStatus(session: string, tool: string, taskId = TASK): Envelope {
+    return makeEnvelope({
+      kind: "status-update",
+      correlationId: CORR,
+      taskId,
+      contextId: CTX,
+      from: { session, agentType: "claude-code" },
+      payload: {
+        taskId,
+        contextId: CTX,
+        final: false,
+        status: { state: "working", timestamp: "2026-08-20T00:00:01.000Z" },
+        metadata: { tool },
+      },
+    });
+  }
+
+  it("turns a tool status-update into a dim progress line", () => {
+    const s = apply(initialState, ev(card("otter")), ev(toolStatus("otter", "WebSearch")));
+    expect(s.chat).toHaveLength(1);
+    expect(s.chat[0]).toMatchObject({
+      kind: "progress",
+      session: "otter",
+      text: "using WebSearch…",
+      correlationId: CORR,
+      taskId: TASK,
+    });
+  });
+
+  it("collapses a run of the same tool into one line", () => {
+    const s = apply(
+      initialState,
+      ev(toolStatus("otter", "WebSearch")),
+      ev(toolStatus("otter", "WebSearch")),
+      ev(toolStatus("otter", "WebSearch")),
+    );
+    expect(s.chat).toHaveLength(1);
+    expect(s.chat[0].text).toBe("using WebSearch…");
+  });
+
+  it("starts a new line when the tool changes, so the sequence still reads", () => {
+    const s = apply(
+      initialState,
+      ev(toolStatus("otter", "WebSearch")),
+      ev(toolStatus("otter", "WebSearch")),
+      ev(toolStatus("otter", "WebFetch")),
+      ev(toolStatus("otter", "WebSearch")),
+    );
+    expect(s.chat.map((c) => c.text)).toEqual([
+      "using WebSearch…",
+      "using WebFetch…",
+      "using WebSearch…",
+    ]);
+  });
+
+  it("keeps two workers' tool lines apart", () => {
+    const s = apply(
+      initialState,
+      ev(toolStatus("otter", "WebSearch", "t1")),
+      ev(toolStatus("lynx", "WebSearch", "t2")),
+    );
+    expect(s.chat).toHaveLength(2);
+    expect(s.chat.map((c) => c.session)).toEqual(["otter", "lynx"]);
+  });
+
+  it("sees through a twisty when deciding what is consecutive", () => {
+    const s = apply(
+      initialState,
+      ev(toolStatus("otter", "WebSearch")),
+      ev(chunk("otter", "[thinking] weighing the sources")),
+      ev(toolStatus("otter", "WebSearch")),
+    );
+    expect(s.chat.filter((c) => c.kind === "progress")).toHaveLength(1);
+  });
+
+  it("leaves an ordinary status-update alone", () => {
+    const s = apply(initialState, ev(card("otter")), ev(status("otter", "working", false)));
+    expect(s.chat).toHaveLength(0);
+  });
+
+  it("says nothing for a terminal status, however it is marked", () => {
+    const final = apply(initialState, ev(card("otter")), ev(toolStatusFinal("otter")));
+    expect(final.chat).toHaveLength(0);
+    expect(final.agents.get("otter")?.status).toBe("done");
+  });
+
+  function toolStatusFinal(session: string): Envelope {
+    return makeEnvelope({
+      kind: "status-update",
+      correlationId: CORR,
+      taskId: TASK,
+      contextId: CTX,
+      from: { session, agentType: "claude-code" },
+      payload: {
+        taskId: TASK,
+        contextId: CTX,
+        final: true,
+        status: { state: "completed", timestamp: "2026-08-20T00:00:02.000Z" },
+        metadata: { tool: "WebSearch" },
+      },
+    });
+  }
+
+  it("does not narrate chatops' own tool use", () => {
+    const s = apply(initialState, ev(card("chatops")), ev(toolStatus("chatops", "delegate_task")));
+    expect(s.chat).toHaveLength(0);
+  });
+
+  // report_progress publishes metadata.progress, not metadata.tool.
+  it("leaves report_progress milestones untouched", () => {
+    const s = apply(
+      initialState,
+      ev(card("otter")),
+      ev(chunk("otter", "[progress] fetching spec 2/2")),
+      ev(progressStatus("otter", "fetching spec 2/2")),
+    );
+    expect(s.chat).toHaveLength(1);
+    expect(s.chat[0]).toMatchObject({ kind: "progress", text: "fetching spec 2/2" });
+    expect(s.agents.get("otter")?.statusLine).toBe("fetching spec 2/2");
+  });
+
+  function progressStatus(session: string, note: string): Envelope {
+    return makeEnvelope({
+      kind: "status-update",
+      correlationId: CORR,
+      taskId: TASK,
+      contextId: CTX,
+      from: { session, agentType: "claude-code" },
+      payload: {
+        taskId: TASK,
+        contextId: CTX,
+        final: false,
+        status: { state: "working", timestamp: "2026-08-20T00:00:01.000Z" },
+        metadata: { progress: note },
+      },
+    });
+  }
+
+  // report_progress is itself an SDK tool, so every milestone fired a tool_use
+  // and printed "using mcp__a2a__report_progress…" directly above the
+  // [progress] line that is the actual signal.
+  it("says nothing for our own report_progress tool", () => {
+    const s = apply(
+      initialState,
+      ev(card("otter")),
+      ev(toolStatus("otter", "mcp__a2a__report_progress")),
+      ev(chunk("otter", "[progress] fetching spec 2/2")),
+    );
+    expect(s.chat).toHaveLength(1);
+    expect(s.chat[0].text).toBe("fetching spec 2/2");
+  });
+
+  it("suppresses report_progress whichever server exposes it", () => {
+    const s = apply(initialState, ev(toolStatus("otter", "mcp__other__report_progress")));
+    expect(s.chat).toHaveLength(0);
+  });
+
+  it("strips the MCP wiring from any other tool name", () => {
+    const s = apply(initialState, ev(toolStatus("otter", "mcp__foo__search")));
+    expect(s.chat).toHaveLength(1);
+    expect(s.chat[0].text).toBe("using search…");
+  });
+
+  it("leaves an ordinary tool name alone", () => {
+    const s = apply(initialState, ev(toolStatus("otter", "WebSearch")));
+    expect(s.chat[0].text).toBe("using WebSearch…");
+  });
+
+  // Internal bookkeeping, not activity anyone is watching for.
+  it("says nothing for TodoWrite", () => {
+    const s = apply(initialState, ev(toolStatus("otter", "TodoWrite")));
+    expect(s.chat).toHaveLength(0);
+  });
+
+  // Drafting into the pod's scratch directory is real work for a research task.
+  it("still narrates the file tools", () => {
+    const s = apply(
+      initialState,
+      ev(toolStatus("otter", "Write")),
+      ev(toolStatus("otter", "Read")),
+    );
+    expect(s.chat.map((c) => c.text)).toEqual(["using Write…", "using Read…"]);
+  });
+
+  it("ignores a malformed or empty tool name", () => {
+    const s = apply(initialState, ev(toolStatus("otter", "mcp__a2a__")));
+    expect(s.chat).toHaveLength(0);
+  });
+
+  it("does not let a suppressed tool break the collapse of the run around it", () => {
+    const s = apply(
+      initialState,
+      ev(toolStatus("otter", "WebSearch")),
+      ev(toolStatus("otter", "mcp__a2a__report_progress")),
+      ev(toolStatus("otter", "WebSearch")),
+    );
+    expect(s.chat).toHaveLength(1);
+  });
+
+  it("does not let a tool line become the tap's status line", () => {
+    const s = apply(initialState, ev(card("otter")), ev(toolStatus("otter", "WebSearch")));
+    expect(s.agents.get("otter")?.statusLine).toBeUndefined();
+  });
+
+  it("still advances the task state", () => {
+    const s = apply(initialState, ev(card("otter")), ev(toolStatus("otter", "WebSearch")));
+    expect(s.tasks.get(TASK)?.state).toBe("working");
+  });
+});
+
+/**
+ * Captured verbatim from the live GKE stream on 2026-08-20 (worker `raven`,
+ * A2A seqs 279-320) with a wire dump, not reconstructed from the mapper.
+ *
+ * The finding these pin: on that deployment EVERY thinking chunk is the bare
+ * marker with no content — all 74 of them across four sessions were byte-for-
+ * byte `"[thinking] "`. The API is in its redacted-thinking phase, where it
+ * "otherwise streams only pings" (claude-agent-sdk `SDKThinkingTokensMessage`
+ * doc), so `delta.thinking` is the empty string and the mapper faithfully
+ * emits a marker with nothing behind it.
+ *
+ * There is therefore no reasoning text on the wire for a twisty to show. These
+ * tests exist so that whatever is decided about enabling `thinking.display`,
+ * the reducer's behaviour on this input is deliberate rather than accidental.
+ */
+describe("reduce: the captured GKE wire (redacted thinking)", () => {
+  const CAPTURED_PINGS = 10;
+  const captured = (session: string) => {
+    const evs: BusEvent[] = [];
+    for (let i = 0; i < 4; i++) evs.push(ev(chunk(session, "[thinking] ")));
+    evs.push(ev(chunk(session, "[progress] Starting research on Ontario student insurance")));
+    for (let i = 0; i < CAPTURED_PINGS - 4; i++) evs.push(ev(chunk(session, "[thinking] ")));
+    evs.push(ev(chunk(session, "I")));
+    evs.push(ev(chunk(session, " have enough to compile a solid, practical answer now.")));
+    return evs;
+  };
+
+  it("opens no twisty, because not one ping carries any reasoning", () => {
+    const s = apply(initialState, ev(card("raven")), ...captured("raven"));
+    expect(s.chat.filter((c) => c.kind === "thinking")).toHaveLength(0);
+  });
+
+  it("never renders the bare marker as visible output", () => {
+    const s = apply(initialState, ev(card("raven")), ...captured("raven"));
+    for (const entry of s.chat) expect(entry.text).not.toContain("[thinking]");
+  });
+
+  it("keeps the milestone and the deliverable prose intact around the pings", () => {
+    const s = apply(initialState, ev(card("raven")), ...captured("raven"));
+    expect(s.chat.map((c) => c.kind)).toEqual(["progress", "delegate"]);
+    expect(s.chat[0].text).toBe("Starting research on Ontario student insurance");
+    // The pings between the two prose fragments must not have split the
+    // sentence — this is the merge that thinking entries are transparent to.
+    expect(s.chat[1].text).toBe("I have enough to compile a solid, practical answer now.");
+  });
+
+  // The same run with reasoning text present — what enabling
+  // `thinking: { display: 'summarized' }` would put on the wire. Kept beside
+  // the captured case so the difference is one line of input, not a mystery.
+  it("does open a twisty the moment a ping carries content", () => {
+    const s = apply(
+      initialState,
+      ev(card("raven")),
+      ev(chunk("raven", "[thinking] ")),
+      ev(chunk("raven", "[thinking] Weighing UHIP against")),
+      ev(chunk("raven", "[thinking]  the private plans")),
+      ev(chunk("raven", "I")),
+      ev(chunk("raven", " have enough now.")),
+    );
+    const twisties = s.chat.filter((c) => c.kind === "thinking");
+    expect(twisties).toHaveLength(1);
+    expect(twisties[0].latest).toBe("Weighing UHIP against the private plans");
+    expect(s.chat.filter((c) => c.kind === "delegate")[0].text).toBe("I have enough now.");
+  });
+});
+
+describe("reduce: the rail status line", () => {
+  it("tracks the latest progress milestone while the worker runs", () => {
+    const s = apply(
+      initialState,
+      ev(card("otter")),
+      ev(chunk("otter", "[progress] one")),
+      ev(chunk("otter", "[progress] two")),
+    );
+    expect(s.agents.get("otter")?.statusLine).toBe("two");
+  });
+
+  // A finished pod reporting "Fetched 2 of 4 sources" looks busy forever.
+  it("clears on a terminal status-update", () => {
+    const s = apply(
+      initialState,
+      ev(card("otter")),
+      ev(chunk("otter", "[progress] fetching sources")),
+      ev(status("otter", "completed", true)),
+    );
+    expect(s.agents.get("otter")).toMatchObject({ status: "done" });
+    expect(s.agents.get("otter")?.statusLine).toBeUndefined();
+  });
+
+  it("clears on agent-closed", () => {
+    const s = apply(
+      initialState,
+      ev(card("otter")),
+      ev(chunk("otter", "[progress] fetching sources")),
+      ev(closed("otter")),
+    );
+    expect(s.agents.get("otter")).toMatchObject({ status: "closed" });
+    expect(s.agents.get("otter")?.statusLine).toBeUndefined();
+  });
+
+  it("leaves the long-lived chatops agent's line alone on its own terminal turns", () => {
+    const s = apply(
+      initialState,
+      ev(card("chatops")),
+      ev(status("chatops", "completed", true)),
+    );
+    expect(s.agents.get("chatops")?.status).toBe("live");
+  });
+});
+
+describe("partitionThinking", () => {
+  it("splits a marked chunk into no plain text and the fragment", () => {
+    expect(partitionThinking("[thinking] hello")).toEqual({ plain: "", thinking: "hello" });
+  });
+
+  it("strips every embedded marker from a batched run", () => {
+    expect(partitionThinking("[thinking] a[thinking] b").thinking).toBe("ab");
+  });
+
+  it("reports unmarked text as plain", () => {
+    expect(partitionThinking("just output")).toEqual({ plain: "just output", thinking: null });
+  });
+
+  it("only honours the marker at position 0", () => {
+    expect(partitionThinking("see the [thinking] marker").thinking).toBeNull();
+  });
+
+  it("handles the marker with no trailing space or content", () => {
+    expect(partitionThinking("[thinking]")).toEqual({ plain: "", thinking: "" });
   });
 });
 

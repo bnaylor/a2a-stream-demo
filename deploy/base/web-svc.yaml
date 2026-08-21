@@ -10,6 +10,6 @@ spec:
     - name: http
       port: 80
       targetPort: 80
-      # NodePort: browser reaches http://10.3.10.<node>:<nodePort>. UI default.
-      nodePort: 30080
-  type: NodePort
+      # Exposure is an overlay concern: NodePort 30080 on local, LoadBalancer
+      # on gke.
+  type: ClusterIP

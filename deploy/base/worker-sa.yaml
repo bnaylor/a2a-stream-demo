@@ -1,0 +1,13 @@
+# Worker pods run under this ServiceAccount but get NO k8s API access: there
+# is deliberately no Role/RoleBinding for it, and both the SA and the pod spec
+# (agents/chatops/src/k8s.ts) disable token automount.
+#
+# It exists purely so GKE Workload Identity has a KSA to bind: the gke overlay
+# annotates it with iam.gke.io/gcp-service-account, and the worker reaches
+# Vertex through the GKE metadata server — not through a mounted k8s token.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: a2a-worker
+  namespace: a2a-demo
+automountServiceAccountToken: false

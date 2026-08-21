@@ -248,3 +248,594 @@ across a trim, and no trim under the cap.
   count moved 42 → 45 because the chatops fix round landed in `f476312`
   meanwhile)
 - `npm run typecheck` (root) — clean
+
+---
+
+# tweaks2 round — live GKE bug reports
+
+Source: `tweaks2.md`. Two rendering/routing bugs plus two small items. Branch
+`gke-phase`.
+
+## A. Reproduction (built before any fix)
+
+`scripts/fake-chatops.ts` was rewritten to be faithful rather than brief: it now
+drives the **real `mapSdkMessage`** with synthetic SDK stream messages, so every
+envelope it publishes has exactly the shape a real agent puts on the wire.
+Hand-rolled envelopes would have let the UI be developed against a wire format
+that does not exist — which is close to how these bugs survived the last round.
+
+It reproduces the worker faithfully: per-token `thinking_delta`s (the mapper
+stamps `[thinking] ` on **every** fragment individually), `report_progress`
+milestones published twice (a `[progress] ` chunk *and* a `working` status with
+`metadata.progress`), multi-token `text_delta`s, `tool_use` status updates, the
+artifact, the terminal status, `agent-closed`, and ChatOps' proactive summary
+turn on its own task id.
+
+Two modes, because the model configuration changes the wire shape:
+
+- `FAKE_MODE=thinking` (default) — extended thinking on: reasoning arrives as
+  `thinking_delta` and is marked.
+- `FAKE_MODE=prose` — extended thinking effectively off: one content-free
+  thinking block, a long stretch of silent tool calls, then the same reasoning
+  as ordinary **unmarked** `text_delta`.
+
+Observed over CDP at 400ms intervals through a live run (`/tmp/cdp-repro.mjs`),
+sampling mid-run state rather than the resting state.
+
+**`thinking` mode — symptom 1 reproduced, symptom 2 did not:**
+
+```
+t=5.6s taps: you => websocket | chatops => awaiting card
+             otter => Cross-checking hours and parking      <-- never clears
+       twisties: [chatops]"I will spawn a worker." [otter]"...2026 timestamp."
+       plain [thinking] entries: 0                          <-- routing fine
+```
+
+The tap kept reporting a milestone from several seconds earlier, indefinitely,
+and at 80 characters it ran straight through its neighbours' labels. Twisties
+filled correctly and live.
+
+**`prose` mode — symptom 2 reproduced exactly, point for point:**
+
+```
+t=3.2s  otter => Starting research: what's a good place for brunch in Toronto on the w
+        chat-thinking :: ▸[otter][thinking]              <-- (1a) twisty, EMPTY
+        chat-progress :: ⏳Starting research: ...         <-- (1b) hourglass line
+t=3.2s → t=5.6s   chat unchanged, bus animating          <-- (2) frozen chat
+t=5.6s  chat-delegate :: [otter]Let me think about what the user actually wants…
+                                                          <-- (3) below the twisty,
+                                                              always rendered
+t=8.0s  chat-chatops :: [otter] found three brunch spots… <-- (4) summary, as intended
+```
+
+## B. Root causes
+
+**Symptom 1 — rail status line.** `statusText()` in `Rail.tsx` returned
+`agent.statusLine` *before* consulting lifecycle state, nothing ever cleared
+`statusLine`, and the SVG `<text>` had no width budget. So a finished pod kept
+advertising a milestone from mid-run until dismissed, at whatever length the
+worker wrote it. (The user read this as "the thinking line"; on the wire it is
+the last `[progress] ` milestone — reasoning never reaches the rail, which the
+new test pins.)
+
+**Symptom 2a — empty twisty.** A thinking block that streams no text still
+produced `"[thinking] "` on the wire. `startsWith` matched, the stripped delta
+was `""`, and the reducer opened a thinking entry whose `latest` was empty — a
+twisty sitting in the transcript with nothing to say for the whole run.
+
+**Symptom 2b — reasoning as plain entries, after a frozen chat.** The mapper
+marks *extended-thinking* blocks only. A model whose reasoning arrives as
+`text_delta` produces text that is **byte-identical on the wire to the
+deliverable**, so the reducer correctly classifies it as `delegate` output. The
+"frozen chat" before it is the tool-call stretch: `tool_use` maps to a bare
+`status-update`, which pulses the rail and adds nothing to the transcript.
+
+## C. Fixes
+
+1. **`statusLine` is a live-only readout.** Cleared in the reducer on a terminal
+   status-update and on `agent-closed`; `statusText()` only consults it while
+   `live`/`stale`. A finished tap reports the state it finished in.
+2. **Everything on a tap is clipped to its slot.** New pure `slotWidths()` gives
+   each tap the tighter of its two neighbour gaps (labels are centred, so half
+   each way), and `ellipsize()` fits name and status to that budget. Two taps
+   can no longer claim the same pixels.
+3. **No twisty without content.** A content-free thinking block is swallowed —
+   the marker is still consumed, so it can never fall through to a plain entry
+   either. The twisty opens as soon as real content arrives.
+4. **Marker handling hardened** (`partitionThinking`, exported and unit-tested).
+   The marker is honoured only at index 0 — the mapper's guarantee, and it keeps
+   a worker writing the literal `[thinking]` in prose from having its sentence
+   eaten. Once a chunk *is* thinking, every embedded marker is a fragment
+   boundary and is stripped, so batched/concatenated deltas cannot leak marked
+   text into the transcript.
+5. **`Chat`** shows `thinking…` rather than a blank row if a twisty ever has no
+   line yet.
+
+### Not fixed, needs a decision rather than a guess
+
+Symptom 2b's remaining half. When a model emits reasoning as `text_delta`, the
+UI cannot distinguish it from the deliverable — the bytes are the same. Routing
+it to a twisty would also hide the worker's streamed answer, which the user
+liked in the previous round (`[otter] Found three options…`). The fix belongs
+in `agents/common/src/mapper.ts` (mark a worker's intermediate assistant text,
+since the deliverable is separately published as an artifact and summarised by
+ChatOps) and changes wire semantics, so it is flagged rather than guessed at.
+Dropping back to haiku (item 4) does not change this.
+
+## C. Small items
+
+- `SUMMARY_ARTIFACT_CHARS` 4000 → 12000, with the rationale in the comment;
+  cap test updated to 12000.
+- Workers and ChatOps back to `claude-haiku-4-5`: defaults in
+  `agents/worker/src/main.ts` and `agents/chatops/src/main.ts`, values in
+  `deploy/base/chatops-deploy.yaml` and `deploy/base/worker-reference.yaml`.
+  (The Vertex overlay's comment naming sonnet-5 is a dated record of what was
+  probed on 2026-08-20 and was left as written.)
+
+## Mutation check
+
+Each fix broken in turn; every one is caught (baseline 180 in the three suites
+exercised):
+
+| mutation | result |
+|---|---|
+| honour the marker anywhere, not just index 0 | 2 failed |
+| strip only the leading marker, not embedded ones | 12 failed |
+| let an empty thinking block open a twisty | 2 failed |
+| stop clearing `statusLine` on terminal | 1 failed |
+| stop clearing `statusLine` on `agent-closed` | 1 failed |
+| route thinking to a plain delegate entry | 21 failed |
+
+## After the fix — same CDP repro, clean stream
+
+`FAKE_MODE=prose`, the shape that produced the report:
+
+```
+t=1.2s  twisties: [chatops]"I will spawn a"          <-- updating live
+t=3.2s  otter => Starting research: what's a good place f…   <-- CLIPPED
+        twisties: [chatops]"I will spawn a worker."   <-- no empty [otter] twisty
+t=5.6s  otter => Fetched 2 of 4 sources
+t=8.0s  otter => closed                               <-- milestone cleared
+        plain [thinking] entries: 0   (every sample)
+```
+
+`FAKE_MODE=thinking` re-checked for regression: twisties still fill live, tap
+still clears to `closed`.
+
+## Verification
+
+- `npm run -w web test` — **213 passed** (173 → 213)
+- `npx vitest run agents/` — 37 passed
+- `npm test` (root) — 55 passed / 4 skipped
+- `npm run typecheck` and `npm run typecheck:web` — clean
+- `npm run -w web build` — green
+- `kubectl kustomize` on `deploy/base` (13 objects), `overlays/local` (13),
+  `overlays/gke` (14) — all render; model env resolves to `claude-haiku-4-5`
+
+---
+
+# tweaks2 follow-up — worker tool activity in chat
+
+## Ruling received
+
+Mapper wire semantics stay as-is: with haiku workers the `text_delta` stream
+**is** the deliverable (the interleaving beat from M2), so routing it into a
+twisty would hide the feature. No change to `agents/common/src/mapper.ts`. The
+"reasoning as plain entries" half of symptom 2b is therefore closed as
+documented behaviour, not a defect.
+
+## What this adds
+
+The other half of the "chat silent while the rail pulses" complaint: the
+tool-use phase. A `tool_use` block maps to a bare non-final `working`
+status-update (`metadata: { tool: name }`), which pulsed the rail and put
+nothing in the transcript — so a run that was mostly WebFetch looked frozen
+next to a busy bus.
+
+Those now become dim `progress` entries: `using WebSearch…`, session-attributed
+like other delegate traffic and rendered in the existing hourglass style.
+
+Consecutive **identical** lines from the same session collapse into one — a
+research worker fires the same tool repeatedly and six identical rows say
+nothing that one does — but a *different* tool starts a new row, so the
+sequence of what the worker is doing still reads. Thinking entries are skipped
+when deciding what counts as consecutive, the same rule `appendChunk` uses,
+since twisties are pinned and updated in place rather than appended.
+
+Untouched: terminal/final statuses (never narrated), `report_progress`
+milestones (they carry `metadata.progress`, not `metadata.tool`), the rail's
+status line (a tool beat is not a milestone and must not claim the tap), and
+ChatOps' own tool use (it narrates that in words already).
+
+**Note on "session-attributed":** the entry carries `session`, which scopes the
+collapse so two concurrent workers never merge into each other. The visible row
+keeps the existing progress styling with no `[session]` prefix, matching
+`report_progress` lines — adding a prefix would have changed how every existing
+progress line renders, which was outside this ask. Say the word if the prefix
+is wanted on both.
+
+## Live check
+
+`FAKE_MODE=prose`, the previously-dead stretch between delegation and the
+worker's prose:
+
+```
+t=3.2s  ⏳Starting research: what's a good place for brunch in Toronto…
+        ⏳using WebSearch…
+        ⏳using WebFetch…
+        ⏳using WebSearch…
+        ⏳using WebFetch…
+        ⏳using Read…
+t=5.6s  ⏳using WebFetch…
+        ⏳Fetched 2 of 4 sources
+        [otter] Let me think about what the user actually wants here…
+```
+
+## Mutation check
+
+| mutation | result |
+|---|---|
+| never collapse repeats | 3 failed |
+| collapse on session alone, ignoring which tool | 1 failed |
+| narrate terminal statuses too | 1 failed |
+| mistake `metadata.progress` for a tool | 1 failed |
+| narrate ChatOps' tool use too | 1 failed |
+| ignore thinking when finding the previous line | 1 failed |
+
+## Verification
+
+- `npm run -w web test` — **224 passed** (213 → 224, 11 new)
+- `npm run typecheck:web` — clean
+- `npm run -w web build` — green
+- `npm test` (root) — 55 passed / 4 skipped, untouched
+- `npx vitest run agents/` — 37 passed, untouched
+
+---
+
+# tweaks2 fix round — MCP tool-name noise and trivia
+
+## 1. MCP tool names leaked into the transcript (important)
+
+Correct and embarrassing: `report_progress` is itself an SDK tool, so every
+milestone fired a `tool_use` first. The chat read:
+
+```
+⏳using mcp__a2a__report_progress…
+⏳Fetched 2 of 4 sources
+```
+
+— the plumbing announced immediately above the line that is the actual signal.
+
+`toolOf()` now reduces a wire name to the one a person would recognise and
+decides whether it is worth a line at all:
+
+- `bareToolName()` strips the `mcp__<server>__` wiring, so `mcp__foo__search`
+  renders `using search…` and a plain `WebSearch` is unchanged.
+- `SILENT_TOOLS` suppresses the result entirely. It is matched against the
+  *bare* name, so `report_progress` is silenced whichever server exposes it,
+  not just our own `mcp__a2a__` binding.
+- An empty or malformed name (`mcp__a2a__`) yields nothing rather than
+  `using …`.
+
+Suppression happens before the entry is built, so it cannot break the collapse
+of the run around it: `WebSearch`, `report_progress`, `WebSearch` still reads as
+one `using WebSearch…` line.
+
+**Call on TodoWrite: suppressed.** It is the agent's internal bookkeeping and
+says nothing about the task the audience is watching — it would fire several
+times a run and read as activity while nothing observable happened.
+Deliberately *not* suppressed: `Read`, `Write`, `Glob`, `Grep`. For a research
+task, drafting into the pod's scratch directory is real work, and the
+no-network demo prompt (#5) is entirely `Write`/`Read` — silencing those would
+leave that prompt with a dead transcript, which is the bug this feature exists
+to fix.
+
+## 2-4. Trivia
+
+- **Stale suffix escaped the slot budget** (`Rail.tsx`). The ` ?` was appended
+  *after* `ellipsize`, putting two characters back outside the slot the fit had
+  just respected. It now comes out of the same budget.
+- **Stale comment** in `deploy/base/chatops-deploy.yaml` still argued for
+  sonnet above a haiku value; rewritten to state the actual reason (a slower
+  model reads as a slow bus, which is the opposite of the point).
+- **`ellipsize` doc** said "below three characters" over a `< 2` branch;
+  aligned to the code.
+
+## Mutation check
+
+| mutation | result |
+|---|---|
+| stop suppressing `report_progress` | 3 failed |
+| suppress nothing at all | 4 failed |
+| stop stripping the `mcp__` wiring | 5 failed |
+| strip only the server, leaving `mcp__` on | 5 failed |
+| append the stale suffix outside the budget | 1 failed |
+
+The stale-suffix test reads tap positions back off the rendered geometry and
+derives each slot's character budget from them, so it asserts the real
+invariant — no label longer than its slot — without having to guess the width
+the component measured. A companion test holds the same line for ordinary
+labels.
+
+## Verification
+
+- `npm run -w web test` — **234 passed** (224 → 234, 10 new)
+- `npm run typecheck:web` and `npm run typecheck` — clean
+- `npm run -w web build` — green
+- `npm test` (root) 55 passed / 4 skipped and `npx vitest run agents/` 37
+  passed — both untouched
+- `kubectl kustomize` — `deploy/base` 13 objects, `overlays/local` 13,
+  `overlays/gke` 14; `WORKER_MODEL` renders `claude-haiku-4-5`
+
+---
+
+# REGRESSION: "the twisty seems to have disappeared completely"
+
+Reported by bnaylor on the live GKE deploy, web image digest verified as the
+`9ebe537` build. Diagnosed against the real production stream, not the harness.
+
+## A. What the real wire actually contains
+
+Dumped the durable A2A stream off the cluster (`nats://127.0.0.1:14222`,
+`a2a.tasks.*.events`, `deliverAll`): **416 messages, 397 events**, covering four
+worker sessions — `koala`, `adder`, `raven` and ChatOps' own turns.
+
+**The empirical answer, and it is unambiguous:**
+
+```
+=== every DISTINCT thinking chunk payload on the entire stream ===
+  74 "[thinking] "
+```
+
+All **74** thinking chunks, across all four sessions, are byte-for-byte the
+bare marker with a trailing space and **zero content**. Verified at the raw
+envelope level, not through my 60-char truncation:
+
+```json
+{ "kind": "message-chunk", "from": { "session": "raven" },
+  "payload": { "parts": [ { "kind": "text", "text": "[thinking] " } ] } }
+```
+
+So, to the questions asked:
+
+- Do haiku worker chunks carry `[thinking] ` prefixes at all? **Yes — on every
+  thinking fragment, with the trailing space intact.** No prefix drift, no
+  missing space, no "only the first of a block".
+- Is there any reasoning text behind them? **No. Not one of the 74.**
+
+The reasoning prose arrives separately and *unmarked*, as ordinary `text_delta`
+(`"I"`, `" have enough to compile a solid, practical answer now."`).
+
+## B. Reproduction
+
+Fed the captured fragment sequence (`raven`, seqs 279-320) through the reducer
+as literals:
+
+```
+ENTRIES: [ { kind: "progress",  text: "Starting research on Ontario…" },
+           { kind: "delegate",  text: "I have enough to compile a solid…" } ]
+TWISTIES: 0
+```
+
+Exactly the reported screen: no twisty, prose inline.
+
+`FAKE_MODE=thinking` against the same head still produced twisties — so **the
+harness was lying**. It streamed thinking deltas carrying words; the API sends
+pings carrying nothing. That divergence is why this shipped.
+
+## C. Root cause
+
+`delta.thinking` is the **empty string** on every `thinking_delta`, because
+this deployment is in the API's *redacted-thinking phase*. The SDK says so
+outright (`claude-agent-sdk/sdk.d.ts:4895`, `SDKThinkingTokensMessage`):
+
+> Live thinking-token estimate, digested from `thinking_delta.estimated_tokens`
+> **during the redacted-thinking phase (where the API otherwise streams only
+> pings)**.
+
+The chain: API streams content-free thinking pings → `mapper.ts` checks
+`delta.thinking !== undefined` (an empty string passes) and emits
+`"[thinking] " + ""` → the UI receives a marker with nothing behind it.
+
+Both bug reports are the same underlying fact:
+
+| build | UI behaviour | what bnaylor saw |
+|---|---|---|
+| before `e60b505` | ping opens a twisty that can never fill | "the twisty, empty" (tweaks2) |
+| `e60b505` onwards | empty-block guard suppresses the ping | "the twisty disappeared completely" |
+
+So the *mechanism* of this regression is my empty-block guard (candidate 2),
+but the guard is not the disease. **There is no reasoning text on the wire for
+a twisty to show, on any build.** Reverting the guard would not restore the
+feature — it would restore the previous complaint. Candidate (3) is ruled out:
+`partitionThinking` handles the captured fragments correctly, and the
+sentence-splitting merge still works (test asserts `"I"` + `" have enough…"`
+lands as one entry).
+
+This is therefore **candidate (1)**, and per instruction I stopped rather than
+choosing.
+
+## D. Decision needed — options and costs
+
+Read from `sdk.d.ts`, not assumed. `query()` accepts
+`thinking?: ThinkingConfig`:
+
+```ts
+type ThinkingAdaptive = { type: 'adaptive';  display?: 'summarized' | 'omitted' };  // Opus 4.6+
+type ThinkingEnabled  = { type: 'enabled'; budgetTokens?: number;
+                          display?: 'summarized' | 'omitted' };                     // older models
+type ThinkingDisabled = { type: 'disabled' };
+```
+
+Neither agent currently sets any of this, so both run the session default.
+**Note the display modes: `'summarized'` or `'omitted'` only — there is no raw
+plaintext option.** The best obtainable is a summary, never the verbatim
+reasoning the twisty was originally designed around.
+
+**Option A — enable summarized thinking on the workers.**
+`thinking: { type: 'enabled', budgetTokens: N, display: 'summarized' }` in
+`agents/worker/src/main.ts`. Twisties fill with summary text.
+*Cost:* thinking tokens are billed and take wall-clock time before the first
+visible output — directly against the speed bnaylor just asked for, and the
+reason we moved off sonnet two commits ago. `adaptive` is documented as Opus
+4.6+, so haiku needs the explicit `enabled` form with a budget to pick.
+
+**Option B — accept no worker twisties on haiku.** Workers show progress
+milestones, tool activity and prose; no twisty. ChatOps would twisty only if it
+runs a model/config that streams summaries — on the captured wire it does not,
+so today this means **no twisties anywhere**, and the feature is dormant until
+a model change.
+*Cost:* zero latency, zero spend; a built feature sits unused.
+
+**Option C — enable it on ChatOps only.** ChatOps turns are short, so the
+latency cost lands where it is least visible, and the twisty stays demonstrable
+while workers stay fast.
+*Cost:* small ChatOps latency; workers still have no twisty.
+
+My read, for what it is worth: **C** keeps the feature visible at the lowest
+speed cost, but this is a product call and I have not implemented any of them.
+
+## What was done in this pass
+
+No UI behaviour change — **the built bundle hash is identical to `9ebe537`'s**
+(`index-wLSIMg-O.js`), which is the check that I did not quietly pick an option.
+
+1. **Fixed the harness**, which is what let this ship. `FAKE_MODE` default is
+   now `pings`, reproducing the captured wire exactly: content-free thinking
+   pings interleaved with tool calls, progress pairs and unmarked prose. It now
+   shows `twisties: []` locally, matching GKE. The content-bearing mode is kept
+   as `FAKE_MODE=summarized` and documented as *hypothetical — represents no
+   current deployment*.
+2. **Pinned the captured wire in tests** (4 new), including the exact
+   `raven` sequence, so whichever option is chosen the behaviour is deliberate.
+   One test sits beside them showing the same run *with* content, so the
+   difference is one line of input rather than a mystery.
+3. Throwaway wire-dump scripts were used and removed.
+
+## Verification
+
+- `npm run -w web test` — **238 passed** (234 → 238)
+- `npm run typecheck` / `typecheck:web` — clean
+- `npm run -w web build` — green, bundle byte-identical to `9ebe537`
+- `npm test` (root) 55 / 4 skipped, `npx vitest run agents/` 37 — untouched
+
+---
+
+# Decision A+ implemented: summarized thinking on workers and ChatOps
+
+## The exact option surface (read, not assumed)
+
+`Options.thinking?: ThinkingConfig` — claude-agent-sdk `sdk.d.ts:1698`, inside
+`export declare type Options = {` (`sdk.d.ts:1369`). The union
+(`sdk.d.ts:7931`):
+
+```ts
+type ThinkingAdaptive = { type: 'adaptive';  display?: 'summarized' | 'omitted' };   // 7923, "Opus 4.6+"
+type ThinkingEnabled  = { type: 'enabled'; budgetTokens?: number;
+                          display?: 'summarized' | 'omitted' };                       // 7942, "older models"
+type ThinkingDisabled = { type: 'disabled' };                                         // 7936
+```
+
+## Correction to the brief
+
+**ChatOps is not on sonnet-5.** It was moved to `claude-haiku-4-5` in `9ebe537`
+(the "haiku workers" item), and `deploy/base/chatops-deploy.yaml` sets
+`CHATOPS_MODEL=claude-haiku-4-5`. So *both* agents are pre-4.6 today and both
+need the explicit `enabled` + `budgetTokens` form; neither can use `adaptive`.
+The code still selects per model, so a future switch back to sonnet picks up
+adaptive automatically rather than silently pinning a small budget.
+
+## What each agent now sends
+
+Shared builder `agents/common/src/thinking.ts`, so the rule lives in one
+unit-testable place and neither agent hand-rolls it.
+
+**Worker** (`agents/worker/src/main.ts`), model `claude-haiku-4-5`:
+
+```ts
+thinking: { type: "enabled", budgetTokens: 2048, display: "summarized" }
+```
+
+**ChatOps** (`agents/chatops/src/session.ts`), model `claude-haiku-4-5`:
+
+```ts
+thinking: { type: "enabled", budgetTokens: 2048, display: "summarized" }
+```
+
+Budgets are env-tunable — `WORKER_THINKING_BUDGET` and
+`CHATOPS_THINKING_BUDGET`, default 2048, junk/zero/negative values ignored
+rather than forwarded to the API. Both are set in
+`deploy/base/chatops-deploy.yaml`, and `WORKER_THINKING_BUDGET` was added to
+`PASSTHROUGH_ENV_KEYS` so ChatOps copies it onto every worker pod it creates —
+tuning the twisties is one env var on one Deployment, not a worker image
+rebuild.
+
+Had either agent been on sonnet-5/opus-4.6+, it would instead send
+`{ type: "adaptive", display: "summarized" }`, letting the model choose depth.
+
+## Nothing was impossible, with one ceiling
+
+Everything asked for is wired. The one limit, unchanged from the diagnosis:
+**there is no raw/plaintext thinking mode.** `sdk.d.ts:7925` and `7942` offer
+`'summarized' | 'omitted'` and nothing else, so twisties will show model-written
+summaries, never verbatim reasoning. That is the most the API exposes.
+
+## Verification
+
+Type-level proof that the shape is genuinely accepted: `npm run typecheck` is
+clean, and mutating the `display` literal to an invalid value produces **3
+`error TS`** at the real call sites — so the passing typecheck is meaningful,
+not vacuous.
+
+| mutation | result |
+|---|---|
+| invalid `display` literal | 3 tsc errors |
+| stop asking for summaries | 3 tests failed |
+| send haiku the adaptive form it predates | 3 tests failed |
+| let junk budgets through to the API | 2 tests failed |
+
+- `npx vitest run agents/` — **50 passed** (37 → 50: 11 new for the builder, 2
+  for the pod passthrough)
+- `npm test` (root) — 68 passed / 4 skipped
+- `npm run -w web test` — 238 passed, `typecheck:web` clean, build green and
+  bundle unchanged (no UI change in this commit)
+- `kubectl kustomize` — base, local and gke all render; gke shows both
+  `*_THINKING_BUDGET` at 2048
+
+**The real proof is wire-level and is yours to take:** after rebuild/redeploy,
+re-dump the stream and thinking fragments should carry summary text instead of
+74 bare `"[thinking] "` markers. If they are still bare, the budget is being
+rejected rather than the display mode — try raising `WORKER_THINKING_BUDGET`
+before suspecting the UI.
+
+---
+
+# Correction: ChatOps stays on sonnet-5
+
+The chatops→haiku change in `9ebe537` was mine, from an ambiguous reading of
+tweaks2's "let's drop back to haiku" — that line was about the *worker* jobs.
+bnaylor's approved split is **ChatOps `claude-sonnet-5`, workers
+`claude-haiku-4-5`**, and it is now restored in both places:
+`agents/chatops/src/main.ts` and `deploy/base/chatops-deploy.yaml`.
+`WORKER_MODEL` is untouched at haiku everywhere.
+
+This supersedes the "Correction to the brief" note in the previous section,
+which argued from the mistaken premise that both agents were haiku. The
+consequence there was wrong too: with sonnet restored, **ChatOps does get
+adaptive thinking**, and only the worker needs the explicit budget form. The
+per-model builder already did the right thing — no code change was needed for
+it, only the model value:
+
+| agent | model | `thinking` sent |
+|---|---|---|
+| ChatOps | `claude-sonnet-5` | `{ type: "adaptive", display: "summarized" }` |
+| worker | `claude-haiku-4-5` | `{ type: "enabled", budgetTokens: 2048, display: "summarized" }` |
+
+Three tests now pin that pairing against the deployed defaults specifically, so
+neither side can drift silently. `CHATOPS_THINKING_BUDGET` is inert while
+ChatOps is adaptive — the manifest comment says so, and the worker's budget is
+the load-bearing knob.
+
+Verified: `npx vitest run agents/` 53 passed (50 → 53), root 71 passed / 4
+skipped, typecheck clean, and all three kustomize targets render
+`CHATOPS_MODEL=claude-sonnet-5` with `WORKER_MODEL=claude-haiku-4-5`.

@@ -10,7 +10,7 @@ import {
   subscribeTaskEvents,
   watchTaskRequests,
 } from "@a2a-demo/protocol";
-import { connectBus } from "@a2a-demo/agents-common";
+import { connectBus, missingModelAuthEnv } from "@a2a-demo/agents-common";
 import { ChatOpsHandle, startChatOps } from "./chatops.ts";
 import { makeK8sPodManager } from "./k8s.ts";
 import { makeSdkChatSession } from "./session.ts";
@@ -24,13 +24,23 @@ const need = (k: string): string => {
   return v;
 };
 
+// Fail fast on model credentials (spec §5): an API key, or a complete Vertex
+// config when CLAUDE_CODE_USE_VERTEX=1 (the GKE overlay's path).
+const missingAuth = missingModelAuthEnv(process.env);
+if (missingAuth.length > 0) {
+  for (const k of missingAuth) console.error(`${k} is required`);
+  process.exit(1);
+}
+
 const natsUrl = need("NATS_URL");
-need("ANTHROPIC_API_KEY"); // fail fast (spec §5)
 const workerImage = need("WORKER_IMAGE");
+// ChatOps stays on sonnet: it is the one agent in the conversation with the
+// user, and it routes rather than grinds. Only the worker pods dropped to
+// haiku, where the long research jobs are.
 const model = process.env.CHATOPS_MODEL ?? "claude-sonnet-5";
 const namespace = process.env.NAMESPACE ?? "a2a-demo";
 const secretName = process.env.SECRET_NAME ?? "a2a-demo-secrets";
-const workerModel = process.env.WORKER_MODEL ?? "claude-sonnet-5";
+const workerModel = process.env.WORKER_MODEL ?? "claude-haiku-4-5";
 const workerMaxBudgetUsd = process.env.WORKER_MAX_BUDGET_USD ?? "1.50";
 const OWN_SESSION = "chatops";
 const SWEEP_INTERVAL_MS = 60_000;
@@ -117,6 +127,8 @@ handle = await startChatOps({
     secretName,
     workerModel,
     workerMaxBudgetUsd,
+    // Workers inherit ChatOps' model-auth mode (Vertex vs API key).
+    passthroughEnv: process.env,
   }),
   watchInbox: (cb) => watchTaskRequests(bus.nc, OWN_SESSION, cb),
   publishEvent: (taskId, env) => bus.publishEvent(taskId, env),

@@ -1,0 +1,86 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chatops
+  namespace: a2a-demo
+spec:
+  replicas: 1
+  # ChatOps is a singleton consumer of the inbox: two instances would both
+  # answer every chat turn. Recreate tears the old pod down before the new one
+  # starts, so a rollout never overlaps.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: chatops
+  template:
+    metadata:
+      labels:
+        app: chatops
+    spec:
+      serviceAccountName: chatops
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: chatops
+          # Registry-less on purpose: each overlay's `images:` transformer
+          # rewrites this to its own registry (see deploy/README.md).
+          image: a2a-demo/chatops:latest
+          imagePullPolicy: Always
+          env:
+            # NATS URL for the in-cluster client port (not the NodePort).
+            - name: NATS_URL
+              value: "nats://nats:4222"
+            # API key comes from a Secret created out-of-band (never committed).
+            # optional: true so the pod still starts on GKE, where auth is
+            # Vertex-via-Workload-Identity and no such Secret exists.
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: a2a-demo-secrets
+                  key: ANTHROPIC_API_KEY
+                  optional: true
+            # ChatOps model (defaults to claude-sonnet-5 if not set). Only the
+            # worker pods dropped to haiku; ChatOps holds the conversation and
+            # routes, so it keeps the stronger model.
+            - name: CHATOPS_MODEL
+              value: "claude-sonnet-5"
+            # Worker pod image. Rewritten by the same `images:` transformer as
+            # the container image above, via kustomizeconfig/images.yaml.
+            - name: WORKER_IMAGE
+              value: "a2a-demo/worker:latest"
+            # Worker model (haiku: the complex demo prompts already take tens of
+            # seconds, and a slower model reads as a slow bus rather than a slow
+            # model — which is the opposite of the point being made here).
+            - name: WORKER_MODEL
+              value: "claude-haiku-4-5"
+            # Thinking budget (tokens) for summarized thinking. Without
+            # extended thinking the API streams redacted pings with no text and
+            # the UI's thinking twisties stay empty; this buys the summaries
+            # that fill them. Modest on purpose — it costs latency.
+            #
+            # Ignored while ChatOps is on sonnet-5, which picks its own depth
+            # (adaptive); it applies only if CHATOPS_MODEL is set to a pre-4.6
+            # model. The worker one below is the load-bearing knob.
+            - name: CHATOPS_THINKING_BUDGET
+              value: "2048"
+            # Passed through onto every worker pod ChatOps creates.
+            - name: WORKER_THINKING_BUDGET
+              value: "2048"
+            # Worker max budget (USD per task).
+            - name: WORKER_MAX_BUDGET_USD
+              value: "1.50"
+            # Namespace for worker pods (inject from metadata).
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            # k8s API access is via the mounted service account token (in-cluster).
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 2Gi

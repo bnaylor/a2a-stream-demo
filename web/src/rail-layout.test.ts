@@ -13,7 +13,9 @@ import {
   MIN_WORKER_PITCH,
   WORKER_PITCH,
   buildGhost,
+  ellipsize,
   layoutTaps,
+  slotWidths,
   type TapPosition,
 } from "./rail-layout.ts";
 
@@ -136,6 +138,69 @@ describe("layoutTaps: compression", () => {
   it("returns integer coordinates", () => {
     const taps = layoutTaps(workers("otter", "lynx", "vole"), 1337);
     for (const tap of taps) expect(Number.isInteger(tap.x)).toBe(true);
+  });
+});
+
+describe("ellipsize", () => {
+  it("leaves a label that fits alone", () => {
+    expect(ellipsize("done", 10)).toBe("done");
+    expect(ellipsize("exactly10!", 10)).toBe("exactly10!");
+  });
+
+  it("elides a label that does not fit, to exactly the budget", () => {
+    const out = ellipsize("Fetched 2 of 4 sources", 10);
+    expect(out).toHaveLength(10);
+    expect(out).toBe("Fetched 2…");
+  });
+
+  it("returns nothing when there is no room at all", () => {
+    expect(ellipsize("anything", 0)).toBe("");
+    expect(ellipsize("anything", -4)).toBe("");
+  });
+
+  it("cuts rather than elides below two characters", () => {
+    expect(ellipsize("anything", 1)).toBe("a");
+  });
+});
+
+describe("slotWidths", () => {
+  it("gives each tap half the gap to its nearest neighbour", () => {
+    const taps = layoutTaps(workers("a", "b", "c"), WIDE);
+    const widths = slotWidths(taps, WIDE);
+    // Workers sit at the natural pitch, so their slot is that pitch less the
+    // breathing room.
+    expect(widths.get("b")).toBe(WORKER_PITCH - 8);
+  });
+
+  it("shrinks the slot when the rail compresses", () => {
+    const roomy = slotWidths(layoutTaps(workers("a", "b", "c"), WIDE), WIDE);
+    const tight = layoutTaps(workers(...Array.from({ length: 12 }, (_, i) => `w${i}`)), WIDE);
+    const cramped = slotWidths(tight, WIDE);
+    const inner = tight[4].session;
+    expect(cramped.get(inner)!).toBeLessThan(roomy.get("b")!);
+  });
+
+  it("never reports a negative width", () => {
+    const taps = layoutTaps(workers(...Array.from({ length: 40 }, (_, i) => `w${i}`)), 480);
+    for (const w of slotWidths(taps, 480).values()) expect(w).toBeGreaterThanOrEqual(0);
+  });
+
+  it("covers every tap on the rail", () => {
+    const taps = layoutTaps(workers("otter", "lynx"), WIDE);
+    const widths = slotWidths(taps, WIDE);
+    for (const tap of taps) expect(widths.has(tap.session)).toBe(true);
+  });
+
+  // Two taps must never claim the same pixels, or their labels collide — the
+  // bug the user saw as thinking text running through its neighbours.
+  it("keeps adjacent slots from overlapping", () => {
+    const taps = layoutTaps(workers("a", "b", "c", "d", "e", "f", "g", "h"), WIDE);
+    const widths = slotWidths(taps, WIDE);
+    for (let i = 1; i < taps.length; i++) {
+      const gap = taps[i].x - taps[i - 1].x;
+      const halves = widths.get(taps[i - 1].session)! / 2 + widths.get(taps[i].session)! / 2;
+      expect(halves).toBeLessThanOrEqual(gap);
+    }
   });
 });
 
